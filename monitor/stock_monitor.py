@@ -16,21 +16,37 @@ import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
-try:
-    import requests
-    import schedule
-except ImportError as e:
-    sys.stderr.write(
-        "\n[错误] 缺少必需的第三方库 requests / schedule。\n"
-        "请在该 Python 环境下安装依赖：\n"
-        "    python -m pip install -r requirements.txt\n"
-        "或设置环境变量 WB_PYTHON 指向已安装依赖的 Python（如 WorkBuddy 内置 Python）。\n"
-        f"ImportError: {e}\n"
-    )
-    sys.exit(1)
+# 仅使用 Python 标准库，无需 pip 安装任何第三方依赖：
+#   - 行情/推送的 HTTP 请求用 urllib.request
+#   - 定时检查用 time.sleep 循环（替代原 schedule 库）
+import json
+import urllib.request
+import urllib.error
+
+
+# ===================== 极简 .env 加载器（零依赖） =====================
+def _load_dotenv(path=None):
+    """若进程环境变量中尚无 WECHAT_WEBHOOK_URL，则从脚本同目录的 .env 读取并写入 os.environ。
+    .env 已被 .gitignore 忽略，仅本地使用，密钥不会入库。"""
+    if os.environ.get("WECHAT_WEBHOOK_URL"):
+        return
+    env_path = path or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.exists(env_path):
+        return
+    with open(env_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
+
 
 # ===================== 配置区域 =====================
-# 企业微信机器人 webhook 地址：从环境变量读取，切勿硬编码密钥入库。
+# 企业微信机器人 webhook 地址：优先读环境变量，其次读 monitor/.env 的 WECHAT_WEBHOOK_URL，切勿硬编码密钥入库。
 # 获取方式：企业微信群 → 添加群机器人 → 复制 Webhook 地址，写入 monitor/.env 的 WECHAT_WEBHOOK_URL。
 WEBHOOK_URL = os.environ.get("WECHAT_WEBHOOK_URL", "")
 CSV_FILE = "watchlist.csv"  # 自选股列表（由牛股计算器页面导出，放本 monitor/ 目录下）
@@ -50,8 +66,16 @@ def send_wecom_msg(content: str) -> bool:
         "markdown": {"content": content}
     }
     try:
-        resp = requests.post(WEBHOOK_URL, json=data, timeout=10)
-        result = resp.json()
+        payload = json.dumps(data).encode("utf-8")
+        req = urllib.request.Request(
+            WEBHOOK_URL,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = resp.read().decode("utf-8", errors="ignore")
+        result = json.loads(body)
         return result.get("errcode") == 0
     except Exception:
         return False
@@ -168,8 +192,9 @@ def get_stock_price(code: str) -> Optional[Dict]:
     """获取股票实时价格"""
     try:
         url = QUOTE_API.format(code)
-        resp = requests.get(url, timeout=10)
-        text = resp.text
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            text = resp.read().decode("gbk", errors="ignore")
         var_name = f"v_{code}"
         
         if var_name not in text:
@@ -598,8 +623,11 @@ class StockMonitor:
                     print(f"[{datetime.now()}] 监控进程已在运行 (PID: {old_pid})")
                     return
             except (ProcessLookupError, ValueError, PermissionError, OSError):
-                # 进程不存在或无权限，删除旧PID文件
-                os.remove(pid_file)
+                # 进程不存在或无权限，删除旧PID文件（删除失败也忽略，不影响启动）
+                try:
+                    os.remove(pid_file)
+                except OSError:
+                    pass
         
         # 写入当前PID
         with open(pid_file, 'w') as f:
@@ -667,23 +695,40 @@ class StockMonitor:
                 auction_sent_date[0] = today
                 print(f"[{now}] 竞价情况已推送，结果: {result}")
 
-        schedule.every(CHECK_INTERVAL).seconds.do(job)
-        schedule.every(30).seconds.do(summary_job)
-        schedule.every(30).seconds.do(heartbeat_job)
-        
         print(f"运行中，每{CHECK_INTERVAL}秒检查... Ctrl+C停止")
-        
+
         # 信号处理：退出时清理PID文件
         import atexit
         _pid_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'monitor.pid')
         def cleanup():
             if os.path.exists(_pid_file):
-                os.remove(_pid_file)
+                try:
+                    os.remove(_pid_file)
+                except OSError:
+                    pass
         atexit.register(cleanup)
-        
+
+        # 纯标准库定时循环：主检查按 CHECK_INTERVAL，总结/心跳每 30 秒一次
+        last_summary = last_heartbeat = time.time()
         while True:
-            schedule.run_pending()
-            time.sleep(1)
+            try:
+                job()
+            except Exception:
+                pass
+            now = time.time()
+            if now - last_summary >= 30:
+                try:
+                    summary_job()
+                except Exception:
+                    pass
+                last_summary = now
+            if now - last_heartbeat >= 30:
+                try:
+                    heartbeat_job()
+                except Exception:
+                    pass
+                last_heartbeat = now
+            time.sleep(CHECK_INTERVAL)
 
 
 # ===================== 主程序 =====================
@@ -695,10 +740,17 @@ if __name__ == "__main__":
     script_dir = os.path.dirname(os.path.abspath(__file__))
     csv_path = os.path.join(script_dir, CSV_FILE)
 
+    # 小白友好：缺少 watchlist.csv 时，自动从示例模板生成一份，确保开箱即可运行
     if not os.path.exists(csv_path):
-        print(f"[警告] 未找到 {CSV_FILE}（应在 {script_dir} 下）。")
-        print(f"         请从牛股计算器页面导出 watchlist.csv 放到 monitor/ 目录，")
-        print(f"         或复制 monitor/watchlist.example.csv 为 {CSV_FILE} 后填写自选股。")
+        example_path = os.path.join(script_dir, "watchlist.example.csv")
+        if os.path.exists(example_path):
+            import shutil
+            shutil.copy(example_path, csv_path)
+            print(f"[提示] 未找到 {CSV_FILE}，已自动用示例模板生成 {csv_path}")
+            print(f"        如需自定义自选股，可编辑该文件，或在牛股计算器中导出后覆盖。")
+        else:
+            print(f"[警告] 未找到 {CSV_FILE}（应在 {script_dir} 下），且示例模板缺失。")
+            print(f"         请先准备自选股列表（在牛股计算器中导出 watchlist.csv 放到 monitor/ 目录）。")
 
     monitor = StockMonitor(csv_path)
     

@@ -10,7 +10,7 @@ $taskName = "StockMonitorWake"
 #   2) WorkBuddy 内置 Python（位于 $env:USERPROFILE\.workbuddy\binaries\python\versions\<最新版本>\python.exe，已含纯标准库运行所需环境，开箱即用）
 #   3) PATH 中的 python / python3
 #   4) 以上都没有 → 给出可读错误
-# 说明：监控脚本依赖 requests、schedule（已在 requirements.txt 列出）。启动器会自动检测并在缺失时安装，实现开箱即用。
+# 说明：监控脚本为纯 Python 标准库实现，无需 pip 安装任何第三方依赖；只要有 Python 3 即可开箱即用。
 if ($env:WB_PYTHON) {
     $pythonExe = $env:WB_PYTHON
 } else {
@@ -39,25 +39,10 @@ Write-Host "  Stock Monitor Launcher (with 9:15 wake)"
 Write-Host "============================================"
 Write-Host ""
 
-# 第 0 步：自动检测并安装第三方依赖（小白友好，无需手动 pip install）
-Write-Host "[1/3] Checking dependencies (requests, schedule)..."
-& $pythonExe -c "import requests, schedule" 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  缺少依赖，正在自动安装（首次需联网，稍候）..."
-    & $pythonExe -m pip install -r "$workDir\requirements.txt"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "依赖自动安装失败。请手动运行： $pythonExe -m pip install -r requirements.txt"
-        Read-Host "Press Enter to exit"
-        exit 1
-    }
-    Write-Host "  依赖安装完成。"
-} else {
-    Write-Host "  依赖已就绪。"
-}
+# 说明：监控脚本为纯 Python 标准库实现，无需 pip 安装任何第三方依赖，只要有 Python 3 即可运行。
 
 # Step 1: Register weekday 9:15 wake task（尽力而为：未以管理员身份运行或注册失败都不影响监控启动）
-Write-Host ""
-Write-Host "[2/3] Registering weekday 9:15 wake task..."
+Write-Host "[1/2] Registering weekday 9:15 wake task..."
 try {
     $t = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
     Write-Host "  Wake task already exists, skipping"
@@ -75,7 +60,7 @@ try {
 
 # Step 2: Start monitor
 Write-Host ""
-Write-Host "[3/3] Starting stock monitor..."
+Write-Host "[2/2] Starting stock monitor..."
 Set-Location $workDir
 & $pythonExe "$workDir\stock_monitor.py"
 $monitorExit = $LASTEXITCODE

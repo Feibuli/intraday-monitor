@@ -76,19 +76,11 @@ python -m http.server 8000
 
 > 只要装了 Python 3，后续依赖（requests / schedule）和启动命令都交给启动器自动处理，无需你手动装。
 
-### 1. 安装依赖（开箱即用，一般无需手动）
+### 1. 安装依赖（无需安装，纯标准库）
 
-监控脚本 `stock_monitor.py` 依赖 `requests` 与 `schedule`（见 `monitor/requirements.txt`）。
-**启动器会自动检测并在缺失时安装**，所以绝大多数情况下你什么都不用做——点「启动监控」、粘贴命令即可。
+监控脚本 `stock_monitor.py` 仅使用 **Python 标准库**（`urllib` / `json` / `time`），**不需要 pip 安装任何第三方依赖**。只要按第 0 步装好了 Python 3，直接运行即可，`monitor/requirements.txt` 仅作未来扩展占位。
 
-仅在想手动预装或自动安装失败时运行：
-
-```bash
-python -m pip install -r monitor/requirements.txt
-```
-
-> 若提示 `pip` 不是命令，请用上面 `python -m pip` 的写法（Windows 上 `pip` 常未加入 PATH）。
-> 想装到指定 Python，可设 `WB_PYTHON` 后执行：`"$env:WB_PYTHON" -m pip install -r monitor/requirements.txt`
+> 所以小白流程是：装好 Python 3 → 页面点「启动监控」→ 复制命令粘贴回车，**全程无需 pip**。
 
 ### 2. 配置企业微信推送（可选）
 
@@ -118,15 +110,15 @@ cp monitor/.env.example monitor/.env
    - Windows → 复制 `powershell -ExecutionPolicy Bypass -File "...\monitor\start_monitor.ps1"`
    - macOS / Linux → 复制 `bash ".../monitor/start_monitor.sh"`
 4. 打开 **命令行**（Windows 用「命令提示符 cmd」，macOS/Linux 用「终端 Terminal」），**右键粘贴**刚才复制的命令，按 **回车**；
-5. 脚本会自动检测并安装依赖（首次需联网），随后进入监控循环。看到 `股价监控系统` 相关输出即表示运行成功。
+5. 脚本为纯标准库实现，**无需安装任何依赖**，直接运行进入监控循环。看到 `股价监控系统` 相关输出即表示运行成功。
 
 > 若复制失败，页面会弹出命令框，手动选中复制即可。
-> 依赖缺失时脚本会自己 `pip install`，**小白无需手动装任何东西**。
+> 脚本不依赖任何第三方包，**小白无需 pip 安装任何东西**。
 
 如果本机有多个 Python，启动器会自动挑选：
 
 1. 环境变量 `WB_PYTHON`（显式指定，最高优先级）
-2. **WorkBuddy 内置 Python**（`~/.workbuddy/binaries/python/versions/<最新版本>/python`，已含 `requests`/`schedule`，开箱即用）
+2. **WorkBuddy 内置 Python**（`~/.workbuddy/binaries/python/versions/<最新版本>/python`，开箱即用）
 3. PATH 中的 `python3` / `python`
 
 **备选：手动在终端运行**（不通过页面按钮）

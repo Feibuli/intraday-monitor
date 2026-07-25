@@ -1,2 +1,6 @@
-requests>=2.28
-schedule>=1.2
+# 本监控脚本仅使用 Python 标准库（urllib / json / time），无需安装任何第三方依赖。
+# 只要电脑里有 Python 3（Windows / macOS / Linux 均可），即可直接运行，无需 pip install。
+#
+# 如果未来引入第三方库，在此列出，例如：
+# requests>=2.28
+# schedule>=1.2

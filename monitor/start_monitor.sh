@@ -43,22 +43,10 @@ echo "=============================="
 echo "  Stock Monitor"
 echo "=============================="
 echo ""
-
-# 自动检测并安装第三方依赖（小白友好，无需手动 pip install）
-echo "[1/2] 检查依赖 (requests, schedule) ..."
-if ! "$PY" -c "import requests, schedule" >/dev/null 2>&1; then
-  echo "  缺少依赖，正在自动安装（首次需联网，稍候）..."
-  if ! "$PY" -m pip install -r "$SCRIPT_DIR/requirements.txt"; then
-    echo "依赖自动安装失败。请手动运行： $PY -m pip install -r requirements.txt" >&2
-    exit 1
-  fi
-  echo "  依赖安装完成。"
-else
-  echo "  依赖已就绪。"
-fi
+echo "说明: 监控脚本为纯 Python 标准库实现，无需 pip 安装任何第三方依赖。"
 
 echo ""
-echo "[2/2] 启动监控 ..."
+echo "启动监控 ..."
 "$PY" "$SCRIPT_DIR/stock_monitor.py"
 EXIT_CODE=$?
 echo ""
