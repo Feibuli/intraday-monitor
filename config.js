@@ -15,8 +15,8 @@
  *   src   相对 index.html 的页面路径
  * ============================================================ */
 const PAGES = [
-  { id: 'sector-flow', name: '板块资金流', icon: '📊', src: './pages/sector_flow_dashboard.html' },
   { id: 'bull-calc',   name: '牛股计算器', icon: '🐂', src: './pages/bull_calc.html' },
+  { id: 'sector-flow', name: '板块资金流', icon: '📊', src: './pages/sector_flow_dashboard.html' },
 
   // —— 扩展示例（取消注释即可启用）——
   // { id: 'futures', name: '期货持仓', icon: '🔮', src: './pages/xxx.html' },

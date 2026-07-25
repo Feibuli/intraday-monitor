@@ -55,6 +55,27 @@ python -m http.server 8000
 
 仅当你需要「突破自动推送企业微信」时才需要部署。
 
+### 0. 前置条件：安装 Python 3
+
+监控后端用 Python 编写，**电脑需先装好 Python 3**（启动器找不到 Python 会明确提示）。按你的系统装一个即可：
+
+- **Windows**：到 [python.org](https://www.python.org/downloads/windows/) 下载最新 3.x 安装包，**安装时务必勾选 `Add python.exe to PATH`**（最关键的勾，勾了才能直接 `python` 命令）。装完打开「命令提示符」验证：
+  ```bat
+  python --version
+  ```
+  能显示版本号即成功。
+- **macOS**：系统常自带 Python 3；若没有，装 [Homebrew](https://brew.sh/) 后执行 `brew install python`，或到 python.org 下载 macOS 安装包。验证：
+  ```bash
+  python3 --version
+  ```
+- **Linux（Debian/Ubuntu）**：
+  ```bash
+  sudo apt update && sudo apt install -y python3 python3-pip
+  python3 --version
+  ```
+
+> 只要装了 Python 3，后续依赖（requests / schedule）和启动命令都交给启动器自动处理，无需你手动装。
+
 ### 1. 安装依赖（开箱即用，一般无需手动）
 
 监控脚本 `stock_monitor.py` 依赖 `requests` 与 `schedule`（见 `monitor/requirements.txt`）。
@@ -87,20 +108,20 @@ cp monitor/.env.example monitor/.env
 
 > `watchlist.csv` 含个人持仓/自选，已被 `.gitignore` 忽略，**请勿提交真实数据**。
 
-### 4. 运行
+### 4. 运行（在页面里点「启动监控」即可）
 
-三种方式任选其一，**全平台通用的是方式 A**：
+最推荐的方式：**直接在牛股计算器页面操作，无需记任何命令**。
 
-```bash
-# 方式 A：直接运行（Windows / macOS / Linux 通用，最简单）
-cd monitor && python stock_monitor.py        # 或 python3 stock_monitor.py
+1. 用浏览器打开看板（见上方「快速开始」），进入 **牛股计算器** 页面（默认首页）；
+2. 在页面中找到并点击 **「启动监控」** 按钮；
+3. 页面会自动按当前系统复制对应的启动命令，并弹出提示：
+   - Windows → 复制 `powershell -ExecutionPolicy Bypass -File "...\monitor\start_monitor.ps1"`
+   - macOS / Linux → 复制 `bash ".../monitor/start_monitor.sh"`
+4. 打开 **命令行**（Windows 用「命令提示符 cmd」，macOS/Linux 用「终端 Terminal」），**右键粘贴**刚才复制的命令，按 **回车**；
+5. 脚本会自动检测并安装依赖（首次需联网），随后进入监控循环。看到 `股价监控系统` 相关输出即表示运行成功。
 
-# 方式 B：Windows 启动器（会注册交易日 9:15 唤醒任务，首次需管理员权限）
-powershell -ExecutionPolicy Bypass -File monitor/start_monitor.ps1
-
-# 方式 C：macOS / Linux 启动器
-bash monitor/start_monitor.sh
-```
+> 若复制失败，页面会弹出命令框，手动选中复制即可。
+> 依赖缺失时脚本会自己 `pip install`，**小白无需手动装任何东西**。
 
 如果本机有多个 Python，启动器会自动挑选：
 
@@ -108,8 +129,20 @@ bash monitor/start_monitor.sh
 2. **WorkBuddy 内置 Python**（`~/.workbuddy/binaries/python/versions/<最新版本>/python`，已含 `requests`/`schedule`，开箱即用）
 3. PATH 中的 `python3` / `python`
 
+**备选：手动在终端运行**（不通过页面按钮）
+
+```bash
+# Windows 启动器（会注册交易日 9:15 唤醒任务，首次需管理员权限）
+powershell -ExecutionPolicy Bypass -File monitor/start_monitor.ps1
+
+# macOS / Linux 启动器
+bash monitor/start_monitor.sh
+
+# 任意系统，最简直接运行（无需唤醒任务）
+cd monitor && python stock_monitor.py        # 或 python3 stock_monitor.py
+```
+
 > Windows 的「交易日 9:15 唤醒任务」仅 Windows 生效（用系统计划任务实现）；macOS/Linux 用 `start_monitor.sh` 在前台运行即可，如需开机自启可自行用 `launchd` / `cron` 包装。
-> 在牛股计算器页面点「启动监控」按钮时，会按当前系统自动复制对应的启动命令（Windows→`.ps1`，macOS/Linux→`.sh`）。
 
 ---
 
