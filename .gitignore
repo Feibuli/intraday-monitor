@@ -14,8 +14,7 @@ __pycache__/
 *.log
 monitor/*.pid
 
-# ---------- NGA 大佬监控（含 Cookie 与本地缓存，勿提交） ----------
-monitor/nga_config.json
+# ---------- NGA 大佬监控（本地缓存，勿提交） ----------
 monitor/nga_posts.json
 monitor/nga_debug_last.txt
 monitor/nga_monitor.pid

@@ -6,9 +6,10 @@ NGA 大佬监控后端（纯标准库，无需 pip 安装任何第三方依赖�
 核心能力：
   1. 监控：开启监控后，指定帖子(tid)下、指定作者(authorid)一旦有新发言，
      立即推送企业微信机器人。
-  2. 配置：帖子ID（多个用逗号分隔）/ 作者ID（多个用逗号分隔）/ 监控开关
-     / 刷新频率(默认60秒) / 展示条数(默认30条) / NGA 登录 UID 与 CID
-     （页面只填这两个 id，后端自动拼成 Cookie），全部可在页面内配置。
+    2. 配置：帖子ID（多个用逗号分隔）/ 作者ID（多个用逗号分隔）/ 监控开关
+     / 刷新频率(默认60秒) / 展示方式(固定展示每个作者最后一页) / NGA 登录 UID 与 CID
+     （启动时由页面生成的命令以 --uid/--cid/--target 传入，后端自动拼成 Cookie，
+      不再依赖 nga_config.json 文件）。
   3. 展示：内置 HTTP 服务，页面展示大佬最近发言，自动刷新。
 
 为什么需要 NGA Cookie？
@@ -32,7 +33,6 @@ import json
 import time
 import base64
 import zlib
-import shutil
 import html
 import html.parser
 import threading
@@ -65,8 +65,6 @@ _load_dotenv()
 WEBHOOK_URL = os.environ.get("WECHAT_WEBHOOK_URL", "")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "nga_config.json")
-CONFIG_EXAMPLE = os.path.join(BASE_DIR, "nga_config.example.json")
 PAGE_PATH = os.path.join(BASE_DIR, "..", "pages", "nga_monitor.html")
 POSTS_CACHE_PATH = os.path.join(BASE_DIR, "nga_posts.json")   # 最近发言缓存（gitignored，可选持久化）
 DEBUG_PATH = os.path.join(BASE_DIR, "nga_debug_last.txt")     # 解析失败时的原始响应（gitignored）
@@ -75,11 +73,11 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
 DEFAULT_CONFIG = {
-    "tid": 47207407,
-    "authorids": [150058],
+    "targets": [{"tid": 47207407, "authorids": [150058]}],
+    "tid": 47207407,            # 兼容旧配置（单帖子）
+    "authorids": [150058],      # 兼容旧配置（全局作者）
     "monitor_enabled": True,
     "refresh_interval": 60,   # 秒
-    "display_count": 30,      # 条
     "nga_uid": "",            # NGA 登录 UID（ngaPassportUid）
     "nga_cid": "",            # NGA 登录 CID（ngaPassportCid）
     "port": 8765,
@@ -90,26 +88,22 @@ class NgaError(Exception):
     """NGA 接口返回的业务错误（如权限不足）。"""
 
 
-# ===================== 配置读写 =====================
+# ===================== 配置（仅内存，来自命令行） =====================
 def load_config():
-    """加载配置；缺失时从示例模板生成。始终补全默认值。"""
-    if not os.path.exists(CONFIG_PATH):
-        if os.path.exists(CONFIG_EXAMPLE):
-            shutil.copy(CONFIG_EXAMPLE, CONFIG_PATH)
-            print(f"[配置] 未找到 {os.path.basename(CONFIG_PATH)}，已用示例模板生成。")
-        else:
-            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump(DEFAULT_CONFIG, f, ensure_ascii=False, indent=2)
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
-    for k, v in DEFAULT_CONFIG.items():
-        cfg.setdefault(k, v)
-    return cfg
+    """配置现仅来自命令行参数（--uid/--cid/--target/--interval 等）。
+
+    自 2026-07-25 起不再读写 nga_config.json：UID/CID 与监控目标全部通过
+    页面生成的启动命令（含 --uid/--cid/--target）传入，无磁盘持久化需求。
+    此函数仅返回一份默认配置副本，供缺省值兜底。
+    """
+    return dict(DEFAULT_CONFIG)
 
 
 def save_config(cfg):
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    """配置无磁盘持久化（全部来自命令行 / 页面启动命令）。
+    保留函数以兼容 update_config 与 /api/config 调用点，但不再写文件。
+    """
+    return
 
 
 # ===================== 工具函数 =====================
@@ -208,15 +202,18 @@ def clean_text(s):
 
 
 # ===================== 解析器 =====================
-def parse_posts_json(raw, tid, authorid):
-    """解析 NGA lite JSON，返回帖子列表（每个含 pid/author/authorid/ts/content/url）。"""
-    data = json.loads(raw).get("data", {})
+def parse_posts_json(raw, tid, authorid, thread_title="", users=None):
+    """解析 NGA lite JSON，返回帖子列表（含 pid/author名/authorid/ts/content/url/thread_title）。"""
+    # strict=False：NGA lite 响应常在字符串值里夹带原始换行/制表等控制字符，
+    # 默认 strict 模式会抛错导致整段解析失败、静默回退 HTML 后拿到 0 条。
+    data = json.loads(raw, strict=False).get("data", {})
     if "error" in data:
         raise NgaError(str(data["error"].get("0", data["error"])))
     replies = data.get("__R") or data.get("replies") or []
     if isinstance(replies, dict):
         replies = list(replies.values())
     encode = data.get("encode", "")
+    users = users or {}
     posts = []
     for r in replies:
         if not isinstance(r, dict):
@@ -225,8 +222,9 @@ def parse_posts_json(raw, tid, authorid):
         if pid is None:
             continue
         pid = str(pid)
-        author = _pick(r, "author", "authorname", "username") or ""
         aid = _pick(r, "authorid", "uid") or authorid
+        # 作者名在 __U（uid->用户名）映射里，reply 本身无此字段
+        author = users.get(str(aid)) or _pick(r, "author", "authorname", "username") or ""
         ts = parse_ts(_pick(r, "postdatetimestamp", "timestamp"), _pick(r, "postdate"))
         content = decode_content(_pick(r, "content", "msg", "text", default=""), encode)
         posts.append({
@@ -238,6 +236,7 @@ def parse_posts_json(raw, tid, authorid):
             "content": content,
             "content_text": clean_text(content),
             "tid": str(tid),
+            "thread_title": thread_title,
             "url": f"https://bbs.nga.cn/read.php?tid={tid}&authorid={authorid}#pid{pid}",
         })
     return posts
@@ -257,22 +256,31 @@ class _PostHTMLParser(html.parser.HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         d = dict(attrs)
-        if tag == "a" and d.get("name", "").startswith("pid"):
-            # 新的帖子块开始
-            if self._cur:
-                self._flush()
-            self._cur = {"pid": d["name"][3:], "author": "", "authorid": "",
-                        "ts": 0, "time": "", "content": "", "content_text": ""}
-            self._in_post = True
-            self._buf = []
-        if self._in_post:
-            if tag == "a" and "uid=" in d.get("href", ""):
+        if tag == "a":
+            nm = d.get("name", "")
+            aid = d.get("id", "")
+            pid = None
+            if nm.startswith("pid"):
+                pid = nm[3:]
+            elif aid.startswith("pid") and aid.endswith("Anchor"):
+                pid = aid[3:-len("Anchor")]
+            if pid:
+                if self._cur:
+                    self._flush()
+                self._cur = {"pid": pid, "author": "", "authorid": "",
+                            "ts": 0, "time": "", "content": "", "content_text": ""}
+                self._in_post = True
+                self._buf = []
+            elif "uid=" in d.get("href", ""):
                 m = re.search(r"uid=(\d+)", d.get("href", ""))
                 if m and self._cur:
                     self._cur["authorid"] = m.group(1)
-            if tag == "span" and "postdate" in d.get("class", ""):
+        if self._in_post:
+            cls = d.get("class", "")
+            iid = d.get("id", "")
+            if tag == "span" and ("postdate" in cls or iid.startswith("postdate")):
                 self._buf.append("__DATE__")
-            if tag == "div" and "postcontent" in d.get("class", ""):
+            if tag in ("div", "p", "span") and "postcontent" in cls:
                 self._in_content = True
                 self._content_parts = []
         if self._in_content:
@@ -280,9 +288,9 @@ class _PostHTMLParser(html.parser.HTMLParser):
 
     def handle_endtag(self, tag):
         if self._in_content:
-            if self._stack and self._stack.pop() == tag:
-                pass
-            if tag == "div" and self._stack == []:
+            if self._stack and self._stack[-1] == tag:
+                self._stack.pop()
+            if not self._stack:
                 self._in_content = False
                 if self._cur:
                     self._cur["content"] = "".join(self._content_parts)
@@ -299,6 +307,11 @@ class _PostHTMLParser(html.parser.HTMLParser):
 
     def _flush(self):
         if self._cur and self._cur.get("pid"):
+            if self._in_content and self._content_parts:
+                self._cur["content"] = "".join(self._content_parts)
+                self._cur["content_text"] = clean_text(self._cur["content"])
+                self._in_content = False
+                self._content_parts = []
             self._cur["url"] = (f"https://bbs.nga.cn/read.php?tid={{tid}}"
                                 f"&authorid={self._cur['authorid']}#pid{self._cur['pid']}")
             self.posts.append(self._cur)
@@ -306,7 +319,7 @@ class _PostHTMLParser(html.parser.HTMLParser):
         self._in_post = False
 
 
-def parse_posts_html(raw, tid, authorid):
+def parse_posts_html(raw, tid, authorid, thread_title="", users=None):
     """兜底：解析 NGA read.php HTML。"""
     p = _PostHTMLParser()
     try:
@@ -317,22 +330,63 @@ def parse_posts_html(raw, tid, authorid):
     for post in p.posts:
         post["tid"] = str(tid)
         post["authorid"] = post.get("authorid") or str(authorid)
+        post["thread_title"] = thread_title
         post["url"] = (f"https://bbs.nga.cn/read.php?tid={tid}"
                        f"&authorid={post['authorid']}#pid{post['pid']}")
     return p.posts
 
 
-def parse_posts(raw, tid, authorid):
-    """先试 lite JSON，失败则兜底 HTML。"""
+def parse_posts(raw, tid, authorid, thread_title="", users=None):
+    """先试 lite JSON；若响应以 { 开头却解析失败（多为被截断），直接报错，
+    不再回退 HTML——HTML 兜底仅适用于真正的网页响应，对截断的 JSON 回退只会
+    静默得到 0 条，掩盖「取不到最新发言」的问题。"""
     raw = (raw or "").strip()
     if raw.startswith("{"):
         try:
-            return parse_posts_json(raw, tid, authorid)
+            return parse_posts_json(raw, tid, authorid, thread_title, users)
         except NgaError:
             raise
-        except Exception:
-            pass
-    return parse_posts_html(raw, tid, authorid)
+        except Exception as e:
+            raise NgaError(f"NGA 响应解析失败（可能响应被截断）：{e}")
+    return parse_posts_html(raw, tid, authorid, thread_title, users)
+
+
+def _extract_thread_title(raw):
+    """从 lite JSON 响应里抽取帖子标题（subject）。"""
+    try:
+        d = json.loads(raw, strict=False).get("data", {})
+        t = d.get("__T") or {}
+        return t.get("subject") or t.get("title") or d.get("subject") or ""
+    except Exception:
+        return ""
+
+
+def _extract_users(raw):
+    """从 lite JSON 响应里抽取用户映射：{uid(str): 用户名}。"""
+    try:
+        d = json.loads(raw, strict=False).get("data", {})
+        U = d.get("__U") or {}
+        out = {}
+        for uid, u in U.items():
+            if isinstance(u, dict):
+                out[str(uid)] = u.get("username") or u.get("nickname") or ""
+        return out
+    except Exception:
+        return {}
+
+
+def _extract_thread_title_from_html(raw):
+    """从 NGA 标准 HTML 页面的 <title> 中抽取帖子标题。"""
+    m = re.search(r"<title>.*?-\s*(.+?)\s*-\s*中的回复", raw, re.S)
+    if m:
+        return m.group(1).strip()
+    return ""
+
+
+def _extract_username_from_html(raw, authorid):
+    """从 NGA 标准 HTML 页面内嵌 userInfo.setAll({...}) 中抽取指定 uid 的用户名。"""
+    m = re.search(r'"%s"\s*:\s*\{[^}]*?"username"\s*:\s*"([^"]*)"' % re.escape(str(authorid)), raw)
+    return m.group(1) if m else ""
 
 
 # ===================== 企业微信推送 =====================
@@ -373,8 +427,8 @@ def push_post(post):
 
 # ===================== 监控核心 =====================
 class NgaMonitor:
-    def __init__(self):
-        self.config = load_config()
+    def __init__(self, config=None):
+        self.config = config if config is not None else load_config()
         self.seen_pids = set()
         self.posts = []
         self.lock = threading.Lock()
@@ -383,56 +437,112 @@ class NgaMonitor:
         self.last_success = 0
         self.last_push = 0
         self.seeded = False
+        self.thread_titles = {}   # tid(str) -> 帖子标题
         self.running = True
 
     # ---------- 抓取 ----------
     def fetch_author_posts(self, tid, authorid):
-        """抓取 (tid, authorid) 的帖子，自动翻到最后一页以拿到最新发言。"""
-        def _get(page):
-            url = (f"https://bbs.nga.cn/read.php?tid={tid}&authorid={authorid}"
-                   f"&lite=js&noprefix=1&page={page}")
-            req = urllib.request.Request(url, headers={
-                "User-Agent": UA,
-                "Referer": f"https://bbs.nga.cn/read.php?tid={tid}",
-                "Cookie": _build_cookie(self.config),
-                "Accept": "*/*",
-            })
+        """抓取 (tid, authorid) 的最后一页（即最新发言）。
+
+        NGA 会把过大的 page 参数夹紧到真实末页，所以直接请求 page=9999
+        即可稳定拿到该作者最新的那一页；末页条数不固定（不一定是整 20 条），
+        全部展示，不再按条数配置截断。
+
+        优先用 lite=js JSON 接口（干净、含作者名）；若该接口对该作者截断/
+        报错（某些发言多的作者会触发 NGA 服务端截断），则回退到浏览器同款
+        的标准 HTML 页面解析，保证数据不丢。
+        """
+        raw = self._nga_get(tid, authorid, 9999, lite=True)
+        try:
+            title = _extract_thread_title(raw)
+            if title:
+                self.thread_titles[str(tid)] = title
+            users = _extract_users(raw)
+            return parse_posts(raw, tid, authorid, title, users)
+        except NgaError as e:
+            msg = str(e)
+            # 登录/鉴权问题在 HTML 页面同样无解，直接向上抛
+            if "403" in msg or "未授权" in msg or "未登录" in msg:
+                raise
+            # 其它（多为 lite 接口被截断/解析失败）→ 回退标准 HTML 页面
+            return self._fetch_author_posts_html(tid, authorid)
+        except json.JSONDecodeError:
+            return self._fetch_author_posts_html(tid, authorid)
+
+    def _fetch_author_posts_html(self, tid, authorid):
+        """兜底：用标准 HTML 页面（即浏览器访问的页面）抓取该作者最新一页。"""
+        html = self._nga_get(tid, authorid, 9999, lite=False)
+        title = _extract_thread_title_from_html(html) or self.thread_titles.get(str(tid), "")
+        if title:
+            self.thread_titles[str(tid)] = title
+        name = _extract_username_from_html(html, authorid)
+        posts = parse_posts_html(html, tid, authorid, title, None)
+        for p in posts:
+            if not p.get("author") and name:
+                p["author"] = name
+        return posts
+
+    def _nga_get(self, tid, authorid, page, lite=True, retries=3):
+        """请求 NGA read.php（带登录 Cookie），返回解码后的响应文本。
+
+        仅对网络层异常（连接错误/超时/5xx）做有限重试；NGA 业务错误（403/
+        接口 error）与解析错误不重试——解析错误通常是服务端返回的截断响应，
+        重试无意义，应直接向上抛出让调用方记录为「抓取失败」。
+        """
+        last_err = None
+        for attempt in range(retries):
             try:
+                if lite:
+                    url = (f"https://bbs.nga.cn/read.php?tid={tid}&authorid={authorid}"
+                           f"&lite=js&noprefix=1&page={page}")
+                else:
+                    url = (f"https://bbs.nga.cn/read.php?tid={tid}&authorid={authorid}"
+                           f"&page={page}")
+                req = urllib.request.Request(url, headers={
+                    "User-Agent": UA,
+                    "Referer": f"https://bbs.nga.cn/read.php?tid={tid}",
+                    "Cookie": _build_cookie(self.config),
+                    "Accept": "*/*",
+                })
                 with urllib.request.urlopen(req, timeout=20) as resp:
                     return _decode_resp(resp)
             except urllib.error.HTTPError as e:
+                # 业务错误（403 / NGA 接口 error）：按原逻辑处理，不重试
                 body = _decode_resp(e)
                 if e.code == 403:
                     raise NgaError("NGA 返回 403 未授权（多半是未登录，请在配置中填写 NGA 登录 Cookie）")
                 if body.strip().startswith("{"):
                     try:
-                        d = json.loads(body).get("data", {})
+                        d = json.loads(body, strict=False).get("data", {})
                         if "error" in d:
                             raise NgaError("NGA 返回错误：" + str(d["error"].get("0", d["error"]))
                                            + "（多半是未登录，请在配置中填写 NGA 登录 Cookie）")
                     except (NgaError, ValueError):
                         pass
                 raise
-
-        raw = _get(1)
-        posts = parse_posts(raw, tid, authorid)
-        # 尝试翻到最后一页（最新发言通常在末页）
-        try:
-            data = json.loads(raw).get("data", {})
-            pinfo = data.get("__P") or {}
-            total = int(pinfo.get("totalpages") or pinfo.get("maxpage")
-                        or pinfo.get("pages") or pinfo.get("allpages") or 1)
-            if total > 1:
-                raw2 = _get(total)
-                posts2 = parse_posts(raw2, tid, authorid)
-                if posts2:
-                    posts = posts2
-        except Exception:
-            pass
-        return posts
+            except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as e:
+                last_err = e
+                if attempt < retries - 1:
+                    time.sleep(2 * (attempt + 1))
+        raise NgaError(f"网络请求失败（已重试 {retries} 次）：{last_err}")
 
     def _resolve_ids(self):
+        """返回监控目标列表：[{tid:int, authorids:[int]}]。兼容旧的单 tid/authorids 配置。"""
         cfg = self.config
+        targets = cfg.get("targets")
+        if targets:
+            norm = []
+            for t in targets:
+                try:
+                    tid = int(t.get("tid"))
+                except (TypeError, ValueError):
+                    continue
+                aids = t.get("authorids") or []
+                aids = [int(x) for x in aids if str(x).strip()]
+                norm.append({"tid": tid, "authorids": aids})
+            if norm:
+                return norm
+        # 兼容旧配置
         tids = cfg.get("tid", DEFAULT_CONFIG["tid"])
         if isinstance(tids, str):
             tids = [int(x) for x in re.split(r"[,\s]+", tids) if x.strip()]
@@ -443,13 +553,14 @@ class NgaMonitor:
             aids = [int(x) for x in re.split(r"[,\s]+", aids) if x.strip()]
         elif isinstance(aids, int):
             aids = [aids]
-        return tids, aids
+        return [{"tid": t, "authorids": aids} for t in tids]
 
-    def check_once(self):
-        tids, aids = self._resolve_ids()
+    def check_once(self, do_push_startup=True):
+        targets = self._resolve_ids()
         all_posts, errors = [], []
-        for tid in tids:
-            for aid in aids:
+        for t in targets:
+            tid = t["tid"]
+            for aid in t["authorids"]:
                 try:
                     all_posts.extend(self.fetch_author_posts(tid, aid))
                 except NgaError as e:
@@ -475,6 +586,9 @@ class NgaMonitor:
                 self.seen_pids.update(p["pid"] for p in posts)
                 self.seeded = True
                 print(f"[{datetime.now():%H:%M:%S}] 已播种 {len(posts)} 条历史发言（不推送）。")
+                # 启动推送：告知监控已开启（未配置 webhook 则安全跳过；--test 调试模式不推送）
+                if do_push_startup:
+                    self.push_startup(targets)
             else:
                 if self.config.get("monitor_enabled") and new_posts:
                     for p in sorted(new_posts, key=lambda x: x["ts"]):
@@ -484,6 +598,25 @@ class NgaMonitor:
                     self.last_push = time.time()
                     print(f"[{datetime.now():%H:%M:%S}] 本轮新增 {len(new_posts)} 条，已推送。")
         self.save_cache()
+
+    def push_startup(self, targets):
+        """监控开启时推送一条企业微信通知，确认监控已启动并列出目标。"""
+        if not WEBHOOK_URL:
+            return
+        lines = ["**NGA 大佬监控已开启**"]
+        for t in targets:
+            tid = t["tid"]
+            title = self.thread_titles.get(str(tid), "")
+            # 用已抓到的帖子反查作者名
+            names = {}
+            for p in self.posts:
+                if str(p.get("tid")) == str(tid):
+                    names[str(p.get("authorid"))] = p.get("author") or p.get("authorid")
+            aid_label = "、".join(str(names.get(str(a), a)) for a in t.get("authorids", [])) or "全部"
+            lines.append(f"> 帖子：{title or ('tid ' + str(tid))}")
+            lines.append(f"> 作者：{aid_label}")
+        lines.append(f"> 当前已缓存 {len(self.posts)} 条发言，新发言将实时推送。")
+        send_wecom_msg("\n".join(lines))
 
     def save_cache(self):
         try:
@@ -521,8 +654,8 @@ class NgaMonitor:
         注意：监控与页面已解耦——此接口保留仅供脚本自身/调试使用，页面不调用。
         """
         with self.lock:
-            for k in ("tid", "authorids", "monitor_enabled", "refresh_interval",
-                      "display_count", "nga_uid", "nga_cid", "port"):
+            for k in ("tid", "authorids", "targets", "monitor_enabled", "refresh_interval",
+                      "nga_uid", "nga_cid", "port"):
                 if k in new_cfg:
                     self.config[k] = new_cfg[k]
             save_config(self.config)
@@ -539,9 +672,11 @@ class NgaMonitor:
             last_success = self.last_success
             last_push = self.last_push
             monitor_enabled = cfg.get("monitor_enabled")
-            tids, aids = self._resolve_ids()
-        display = int(cfg.get("display_count", 30))
-        visible = posts[:display]
+            targets = self._resolve_ids()
+        tids = [t["tid"] for t in targets]
+        aids = sorted({a for t in targets for a in t["authorids"]})
+        # 固定展示每个作者的最后一页（末页条数不固定，全量返回，前端按帖子分组展示）
+        visible = posts[:600]
         out = {
             "status": {
                 "monitor_enabled": monitor_enabled,
@@ -554,8 +689,13 @@ class NgaMonitor:
                 "has_cookie": bool(cfg.get("nga_uid") and cfg.get("nga_cid")),
                 "tids": tids,
                 "authorids": aids,
+                "targets": [
+                    {"tid": t["tid"],
+                     "title": self.thread_titles.get(str(t["tid"]), ""),
+                     "authorids": t["authorids"]}
+                    for t in targets
+                ],
                 "refresh_interval": int(cfg.get("refresh_interval", 60)),
-                "display_count": display,
                 "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             },
             "posts": visible,
@@ -611,6 +751,52 @@ def make_handler(monitor):
                 self._send_json(monitor.snapshot())
             elif path == "/api/status":
                 self._send_json(monitor.snapshot().get("status"))
+            elif path == "/api/config":
+                # 读取当前配置文件（页面用来回填，避免每次重输）
+                cfg = monitor.config
+                targets = monitor._resolve_ids()
+                all_aids = sorted({x for t in targets for x in t["authorids"]})
+                self._send_json({
+                    "uid": cfg.get("nga_uid", ""),
+                    "cid": cfg.get("nga_cid", ""),
+                    "targets": [{"tid": t["tid"], "authorids": t["authorids"]} for t in targets],
+                    "tid": targets[0]["tid"] if targets else "",
+                    "aids": ",".join(str(a) for a in all_aids) if all_aids else "",
+                    "interval": int(cfg.get("refresh_interval", 60)),
+                    "monitor_enabled": cfg.get("monitor_enabled", True),
+                    "port": int(cfg.get("port", 8765)),
+                })
+            else:
+                self.send_error(404)
+
+        def do_POST(self):
+            path = urllib.parse.urlparse(self.path).path
+            if path == "/api/config":
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    raw = self.rfile.read(length) if length else b""
+                    data = json.loads(raw.decode("utf-8")) if raw else {}
+                except Exception:
+                    self._send_json({"ok": False, "error": "bad request"}, 400)
+                    return
+                cfg = monitor.config
+                if "uid" in data: cfg["nga_uid"] = str(data["uid"])
+                if "cid" in data: cfg["nga_cid"] = str(data["cid"])
+                if "tid" in data and str(data["tid"]).strip() != "":
+                    try: cfg["tid"] = int(data["tid"])
+                    except Exception: pass
+                if "aids" in data:
+                    cfg["authorids"] = [int(x) for x in re.split(r"[,\s]+", str(data["aids"])) if x.strip()]
+                if "interval" in data:
+                    try: cfg["refresh_interval"] = max(5, int(data["interval"]))
+                    except Exception: pass
+                if "monitor_enabled" in data:
+                    cfg["monitor_enabled"] = bool(data["monitor_enabled"])
+                try:
+                    save_config(cfg)
+                    self._send_json({"ok": True})
+                except Exception as e:
+                    self._send_json({"ok": False, "error": str(e)}, 500)
             else:
                 self.send_error(404)
 
@@ -619,14 +805,54 @@ def make_handler(monitor):
 
 # ===================== 主程序 =====================
 def main():
-    print("=" * 50)
-    print("NGA 大佬监控后端")
-    print("=" * 50)
+    # 强制 stdout/stderr 用 UTF-8，避免中文 Windows（GBK 控制台）打印非 ASCII 字符时崩溃
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
-    if "--test" in sys.argv:
+    import argparse
+    parser = argparse.ArgumentParser(description="NGA 大佬监控后端")
+    parser.add_argument("--uid", help="NGA 登录 UID (ngaPassportUid)")
+    parser.add_argument("--cid", help="NGA 登录 CID (ngaPassportCid)")
+    parser.add_argument("--tid", help="帖子 ID（兼容单帖子用法）")
+    parser.add_argument("--authorids", help="作者 ID，多个用逗号分隔（兼容单帖子用法）")
+    parser.add_argument("--target", action="append", default=[],
+                        help="监控目标，格式 tid:作者id1,作者id2，可重复指定多个帖子")
+    parser.add_argument("--interval", type=int, help="刷新频率(秒)，默认 60")
+    parser.add_argument("--test", action="store_true",
+                        help="调试模式：抓一次并打印，不启动服务/不推送")
+    args = parser.parse_args()
+
+    # 配置现仅来自命令行参数（--uid/--cid/--target/--interval），以默认配置为基底再覆盖。
+    # 不再依赖 nga_config.json 文件（UID/CID 与监控目标随启动命令一并传入，无磁盘持久化）。
+    cfg = dict(DEFAULT_CONFIG)
+    if args.uid:
+        cfg["nga_uid"] = args.uid
+    if args.cid:
+        cfg["nga_cid"] = args.cid
+    if args.tid:
+        cfg["tid"] = int(args.tid)
+    if args.authorids:
+        cfg["authorids"] = [int(x) for x in re.split(r"[,\s]+", args.authorids) if x.strip()]
+    if args.interval:
+        cfg["refresh_interval"] = max(5, int(args.interval))
+    # 多帖子多作者：--target tid:aid1,aid2 可重复
+    cli_targets = []
+    for t in (args.target or []):
+        tid_s, _, aids_s = str(t).partition(":")
+        if not tid_s.strip():
+            continue
+        aids = [int(x) for x in re.split(r"[,\s]+", aids_s) if x.strip()]
+        cli_targets.append({"tid": int(tid_s), "authorids": aids})
+    if cli_targets:
+        cfg["targets"] = cli_targets
+
+    if args.test:
         # 调试模式：抓一次并打印，不启动服务、不推送
-        m = NgaMonitor()
-        m.check_once()
+        m = NgaMonitor(cfg)
+        m.check_once(do_push_startup=False)
         with m.lock:
             posts = m.posts
             err = m.last_error
@@ -637,22 +863,27 @@ def main():
             print(f"  pid={p['pid']} uid={p['authorid']} {p['time']} {p['content_text'][:50]}")
         return
 
-    monitor = NgaMonitor()
+    monitor = NgaMonitor(cfg)
     port = int(monitor.config.get("port", 8765))
+    targets = monitor._resolve_ids()
 
-    # 启动即播种一次（不推送）
+    # 启动即播种一次（不推送，仅启动确认推送）
     threading.Thread(target=monitor.check_once, daemon=True).start()
     # 监控循环
     threading.Thread(target=monitor.monitor_loop, daemon=True).start()
 
     handler = make_handler(monitor)
     server = ThreadingHTTPServer(("127.0.0.1", port), handler)
-    print(f"NGA 监控后端已启动： http://127.0.0.1:{port}/")
-    print(f"监控目标： tid={monitor.config.get('tid')}  authorids={monitor.config.get('authorids')}")
-    print(f"监控推送： {'开启' if monitor.config.get('monitor_enabled') else '关闭'}"
-          f"   刷新频率：{monitor.config.get('refresh_interval')}秒"
-          f"   展示：{monitor.config.get('display_count')}条")
-    print("企业微信：", "已配置" if WEBHOOK_URL else "未配置（仅本地）")
+    print("=" * 50)
+    print("[OK] NGA 大佬监控已开启")
+    print("=" * 50)
+    print(f"监控目标（{len(targets)} 个帖子）：")
+    for t in targets:
+        print(f"  tid={t['tid']}  作者={t['authorids']}")
+    print(f"刷新频率： {monitor.config.get('refresh_interval')} 秒    展示方式： 每个作者的最后一页(全量)")
+    print(f"企微推送： {'已配置' if WEBHOOK_URL else '未配置（仅本地）'}")
+    print(f"本地页面： http://127.0.0.1:{port}/")
+    print(">>> 请回到浏览器打开 NGA 监控页面，点击「立即刷新」查看大佬最近发言。")
     print("Ctrl+C 停止。")
     try:
         server.serve_forever()

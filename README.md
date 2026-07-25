@@ -23,9 +23,7 @@ intraday-monitor/
 │   ├── nga_monitor.py             # NGA 大佬监控后端（抓取 + 推送 + 内置页面服务）
 │   ├── start_monitor.ps1           # Windows 启动器（注册交易日 9:15 唤醒任务）
 │   └── start_monitor.sh            # macOS / Linux 启动器
-│   ├── requirements.txt            # Python 依赖
 │   ├── .env.example                # 企业微信 Webhook 配置模板
-│   ├── nga_config.example.json     # NGA 监控配置模板
 │   └── watchlist.example.csv       # 自选股列表模板
 ├── .gitignore
 ├── LICENSE                         # MIT
@@ -81,7 +79,7 @@ python -m http.server 8000
 
 ### 1. 安装依赖（无需安装，纯标准库）
 
-监控脚本 `stock_monitor.py` 仅使用 **Python 标准库**（`urllib` / `json` / `time`），**不需要 pip 安装任何第三方依赖**。只要按第 0 步装好了 Python 3，直接运行即可，`monitor/requirements.txt` 仅作未来扩展占位。
+监控脚本（`stock_monitor.py` / `nga_monitor.py`）均仅使用 **Python 标准库**（`urllib` / `json` / `time` 等），**不需要 pip 安装任何第三方依赖**。只要装好了 Python 3，直接运行即可，无 `requirements.txt`。
 
 > 所以小白流程是：装好 Python 3 → 页面点「启动监控」→ 复制命令粘贴回车，**全程无需 pip**。
 
@@ -141,7 +139,7 @@ cd monitor && python stock_monitor.py        # 或 python3 stock_monitor.py
 
 ---
 
-## NGA 大佬监控（第三个页面）
+## NGA 大佬监控
 
 监控某个 NGA 帖子下、指定作者（一个或多个）的发言，一旦有新发言立即推送企业微信；**页面仅负责展示大佬最近发言**。
 
@@ -149,38 +147,33 @@ cd monitor && python stock_monitor.py        # 或 python3 stock_monitor.py
 >
 > 核心关系：**一个帖子 ID（tid）可对应多个作者 ID（authorid）**。在配置里填入 tid 与一组 authorid，后端会对每个 (tid, authorid) 组合抓取并聚合。
 
-### 配置放在脚本侧（不在页面）
+### 配置随启动命令传入（无配置文件）
 
-监控目标与登录信息写在 `monitor/nga_config.json`（首次运行会自动从 `nga_config.example.json` 生成），字段含义：
+监控目标与 NGA 登录信息**不再有配置文件**：全部由页面生成的启动命令以命令行参数传入后端，包括：
 
-| 字段 | 说明 |
-| --- | --- |
-| `tid` | 帖子 ID，**支持多个**（数组或逗号分隔），如 `[47207407, 47207408]` |
-| `authorids` | 作者 ID（NGA UID），**支持多个**，如 `[150058, 123456]` |
-| `monitor_enabled` | 是否推送新发言（`true`/`false`） |
-| `refresh_interval` | 抓取频率（秒，默认 60） |
-| `display_count` | 页面展示最近条数（默认 30） |
-| `nga_uid` / `nga_cid` | 你的 NGA 登录 ID（`ngaPassportUid` / `ngaPassportCid`），后端自动拼成 Cookie |
-| `port` | 本地后端端口（默认 8765） |
+- `--uid` / `--cid`：你的 NGA 登录 ID（`ngaPassportUid` / `ngaPassportCid`），后端自动拼成 Cookie；
+- `--target tid:作者id1,作者id2`：监控目标，**可重复**指定多个帖子（每个帖子可对应多个作者）；
+- `--interval`：抓取频率（秒，默认 60）；
+- `--tid` / `--authorids`：兼容单帖子用法的简写。
 
-> ⚠️ 改完 `nga_config.json` 后**重启脚本**生效。该文件已被 `.gitignore` 忽略，**绝不入库、不上传**。
+> 配置仅本机、本次运行有效，**无磁盘文件、无持久化、无需改完重启**——每次启动都是页面当前填好的值。
 
 ### 为什么需要 NGA 登录 ID？
 
 NGA 对未登录（游客）访问 `read.php` 会返回「权限不足」（error 15）。要读取该帖下大佬的发言，**必须填入你浏览器登录后的 NGA `ngaPassportUid` 与 `ngaPassportCid`**。
 
-获取方式：浏览器登录 NGA → 打开目标帖子 → F12 开发者工具 → Application（应用）→ Cookies → 找到 `ngaPassportUid` 与 `ngaPassportCid` 两个值，分别填入 `nga_config.json` 的 `nga_uid` / `nga_cid`。
+获取方式：浏览器登录 NGA → 打开目标帖子 → F12 开发者工具 → Application（应用）→ Cookies → 找到 `ngaPassportUid` 与 `ngaPassportCid` 两个值，填到监控页面的「NGA UID / NGA CID」输入框即可（随启动命令传入后端）。
 
 ### 启动（小白流程）
 
-1. 编辑 `monitor/nga_config.json`，填好 `tid` / `authorids` / `nga_uid` / `nga_cid`；
-2. 打开看板，进入左侧 **NGA大佬监控** 页面；
-3. 若页面显示「监控后端未运行」，点「复制启动命令」，打开命令行粘贴回车运行（脚本纯标准库，无需 pip）：
+1. 打开看板，进入左侧 **NGA 大佬监控** 页面；
+2. 在配置区填写 **NGA UID / NGA CID**（从浏览器 Cookie 取）与**监控目标**（帖子 ID + 作者 ID，可加多个帖子）；
+3. 点右上角「🚀 启动监控」→ 复制生成好的启动命令（已含 `--uid` / `--cid` / `--target` / `--interval`）→ 打开命令行粘贴回车运行（脚本纯标准库，无需 pip）：
    ```bash
    # Windows（复制的命令即此形式，cmd / PowerShell 通用，无需 cd）
-   python "仓库路径\intraday-monitor\monitor\nga_monitor.py"
+   "Python路径\python.exe" "仓库路径\intraday-monitor\monitor\nga_monitor.py" --uid=你的UID --cid=你的CID --target=47207407:150058 --interval=60
    # macOS / Linux
-   python3 "仓库路径/intraday-monitor/monitor/nga_monitor.py"
+   python3 "仓库路径/intraday-monitor/monitor/nga_monitor.py" --uid=你的UID --cid=你的CID --target=47207407:150058 --interval=60
    ```
 4. 后端启动后页面会自动显示大佬最近发言；点「🔄 立即刷新」可手动更新快照。新发言会由后端推送到企业微信。
 
@@ -210,7 +203,7 @@ NGA 对未登录（游客）访问 `read.php` 会返回「权限不足」（erro
 
 - 企业微信 Webhook 地址通过环境变量 `WECHAT_WEBHOOK_URL` 读取，配置在 `monitor/.env`（已被忽略），**绝不硬编码入库**。
 - 自选股 `monitor/watchlist.csv` 含个人数据，已被 `.gitignore` 忽略。
-- NGA 登录 Cookie 配置在 `monitor/nga_config.json`（已被忽略），仅本机读取用于抓取，**绝不入库、不上传**。
+- NGA 登录 Cookie（UID/CID）由页面随启动命令传入后端用于抓取，仅本机、本次运行有效，**绝不入库、不上传**。
 - 所有脚本与看板均为本地运行，不存在远端收集。
 
 ---

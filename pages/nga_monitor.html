@@ -5,19 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NGA 大佬监控</title>
 <style>
- :root{
-   --bg:#06101c; --bg2:#0a1626; --line:rgba(125,154,211,0.18); --line-strong:rgba(125,154,211,0.32);
-   --text:#e8f1ff; --muted:#90a7cf;
-   --blue:#5fa8ff; --cyan:#39d9ff; --green:#2bd67b; --amber:#ffb85c; --red:#ff6b6b;
- }
+ :root{ --bg:#06101c; --bg2:#0a1626; --line:rgba(125,154,211,0.18); --line-strong:rgba(125,154,211,0.32);
+   --text:#e8f1ff; --muted:#90a7cf; --blue:#5fa8ff; --cyan:#39d9ff; --green:#2bd67b; --amber:#ffb85c; --red:#ff6b6b; }
  *{box-sizing:border-box}
  html,body{margin:0;height:100%}
- body{
-   color:var(--text);
-   font-family:"Inter","PingFang SC","Microsoft YaHei",sans-serif;
-   background:linear-gradient(180deg,#06101c 0%,#08111f 44%,#091522 100%);
-   min-height:100vh; padding:18px;
- }
+ body{ color:var(--text); font-family:"Inter","PingFang SC","Microsoft YaHei",sans-serif;
+   background:linear-gradient(180deg,#06101c 0%,#08111f 44%,#091522 100%); min-height:100vh; padding:18px; }
  .wrap{max-width:960px;margin:0 auto}
  h1{font-size:20px;margin:0 0 4px;display:flex;align-items:center;gap:10px}
  .sub{color:var(--muted);font-size:12px;margin-bottom:14px}
@@ -27,228 +20,337 @@
 
  .card{background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
  .card h2{font-size:14px;margin:0 0 12px;color:var(--cyan);letter-spacing:.04em}
+ .cfg-header{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+ .cfg-actions{display:flex;align-items:center;gap:8px}
+ .toggle-btn{background:transparent;border:1px solid var(--line-strong);color:var(--muted);
+   padding:6px 11px;border-radius:9px;font-size:12px;font-weight:500}
+ .toggle-btn:hover{color:var(--text)}
+ .cfg-body{margin-top:12px}
+ .cfg-body.collapsed{display:none}
+
+ .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+ @media(max-width:560px){ .grid{grid-template-columns:1fr} }
+ label{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted)}
+ label small{color:var(--muted);opacity:.7;font-size:10px}
+ input{background:#06101c;border:1px solid var(--line);border-radius:9px;padding:9px 11px;color:var(--text);font-size:13px;font-family:inherit;outline:none}
+ input:focus{border-color:var(--blue)}
+ input:disabled{opacity:.6}
+
+ .bar{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap}
+ button{ background:linear-gradient(135deg,var(--blue),var(--cyan));color:#04121f;border:0;
+   padding:9px 15px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit; }
+ button:active{transform:translateY(1px)}
+ button:disabled{background:#27374d;color:#6b7c98;cursor:not-allowed;transform:none}
+ button.ghost{background:transparent;border:1px solid var(--line-strong);color:var(--text)}
+ .hint{font-size:11px;color:var(--muted);line-height:1.6}
+ .hint code{background:#06101c;padding:1px 5px;border-radius:5px;color:var(--cyan)}
+ .hint b{color:var(--text)}
 
  .banner{display:none;background:rgba(255,107,107,0.12);border:1px solid rgba(255,107,107,0.4);
    color:#ffb4b4;border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.6}
  .banner.show{display:block}
 
- .hint{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.6}
- .hint code{background:#06101c;padding:1px 5px;border-radius:5px;color:var(--cyan)}
+ /* 监控目标（多帖子） */
+ .targets{display:flex;flex-direction:column;gap:10px;margin-bottom:6px}
+ .target-card{background:#06101c;border:1px solid var(--line);border-radius:11px;padding:11px 12px}
+ .target-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px}
+ .target-head .idx{font-size:12px;color:var(--cyan);font-weight:600}
+ .target-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+ @media(max-width:560px){ .target-grid{grid-template-columns:1fr} }
+ .del-btn{background:transparent;border:1px solid rgba(255,107,107,0.4);color:var(--red);
+   padding:4px 10px;border-radius:8px;font-size:12px}
+ .add-btn{margin-top:4px;align-self:flex-start}
 
- .bar{display:flex;gap:10px;margin-bottom:12px}
- button{
-   background:linear-gradient(135deg,var(--blue),var(--cyan));color:#04121f;border:0;
-   padding:9px 15px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;
- }
- button:active{transform:translateY(1px)}
+ /* 帖子分组（可折叠） */
+ .thread{border:1px solid var(--line);border-radius:12px;margin-bottom:10px;background:#06101c;overflow:hidden}
+ .thread>summary{list-style:none;cursor:pointer;padding:12px 14px;display:flex;justify-content:space-between;
+   align-items:center;gap:10px;user-select:none}
+ .thread>summary::-webkit-details-marker{display:none}
+ .thread>summary:hover{background:rgba(125,154,211,0.06)}
+ .thread .t-left{display:flex;flex-direction:column;gap:3px;min-width:0}
+ .thread .t-title{font-size:14px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .thread .t-meta{font-size:11px;color:var(--muted)}
+ .thread .t-meta b{color:var(--cyan)}
+ .thread .chev{color:var(--muted);font-size:12px;transition:.2s;flex:none}
+ .thread:not([open]) .chev{transform:rotate(-90deg)}
+ .thread .posts{padding:4px 14px 12px}
 
- .post{border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px;background:#06101c}
- .post .meta{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--muted);margin-bottom:6px;flex-wrap:wrap}
+ .post{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:9px;background:#0a1626}
+ .post .meta{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--muted);margin-bottom:5px;flex-wrap:wrap}
  .post .author{color:var(--cyan);font-weight:600}
  .post .body{font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word;color:var(--text)}
  .post a{color:var(--blue);text-decoration:none;font-size:12px}
  .post a:hover{text-decoration:underline}
  .empty{color:var(--muted);font-size:13px;text-align:center;padding:30px 0}
- .statusline{font-size:12px;color:var(--muted);margin-bottom:12px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+ .statusline{font-size:12px;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap;align-items:center}
  .statusline b{color:var(--text)}
  .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#0a1626;border:1px solid var(--line-strong);
    color:var(--text);padding:10px 18px;border-radius:10px;font-size:13px;opacity:0;transition:.25s;pointer-events:none;max-width:90vw}
  .toast.show{opacity:1}
- .start code{display:block;background:#06101c;border:1px solid var(--line);border-radius:10px;padding:11px 13px;
-   color:var(--cyan);font-size:13px;margin:8px 0;word-break:break-all;font-family:"SFMono-Regular",Consolas,monospace}
  .pill{display:inline-block;font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:20px;padding:2px 9px;margin-left:8px}
 </style>
 </head>
 <body>
 <div class="wrap" id="app">
-  <!-- 纯展示页：监控/推送由后端执行，本页只显示大佬最近发言 -->
+  <h1><span class="dot off" id="dot"></span>NGA 大佬监控<span class="pill">配置 → 启动 → 刷新</span></h1>
+  <div class="sub">可监控<b>多个帖子</b>，每个帖子可对应<b>多个作者</b>。填写登录信息与监控目标后，点击右上角「启动监控」复制命令到命令行运行；脚本开启后回到本页点击「立即刷新」即可按帖子分组查看大佬最近发言。</div>
+
+  <div class="banner" id="banner"></div>
+
+  <!-- 配置区 -->
+  <div class="card" id="cfgCard">
+    <div class="cfg-header">
+      <h2 style="margin:0">⚙️ 监控配置</h2>
+      <div class="cfg-actions">
+        <button id="startBtn" disabled>🚀 启动监控</button>
+        <button class="toggle-btn" id="toggleCfg">收起 ▲</button>
+      </div>
+    </div>
+    <div class="cfg-body" id="cfgBody">
+      <div class="grid">
+        <label>NGA UID<small>ngaPassportUid，登录 NGA 后从浏览器 Cookie 获取</small><input id="f_uid" placeholder="NGA UID" autocomplete="off"></label>
+        <label>NGA CID<small>ngaPassportCid</small><input id="f_cid" placeholder="NGA CID" autocomplete="off"></label>
+        <label>刷新频率（秒）<input id="f_interval" type="number" value="60" min="5"></label>
+      </div>
+
+      <h2 style="margin-top:16px">📌 监控目标（多个帖子可分别添加）</h2>
+      <div class="targets" id="targets"></div>
+      <button class="ghost add-btn" id="addTarget">➕ 添加帖子</button>
+    </div>
+  </div>
+
+  <!-- 帖子列表区 -->
+  <div class="card">
+    <h2>📜 大佬最近发言（按帖子分组）</h2>
+    <div class="bar">
+      <button id="refreshBtn">🔄 立即刷新</button>
+      <span class="statusline" id="status"></span>
+    </div>
+    <div id="list"><div class="empty">填写配置并选择帖子目标后，回到此页点击「立即刷新」查看大佬发言。</div></div>
+  </div>
 </div>
 <div class="toast" id="toast"></div>
 
 <script>
 (async function(){
-  const app = document.getElementById('app');
-  const toastEl = document.getElementById('toast');
   const DEFAULT_PORT = 8765;
   const portParam = new URLSearchParams(location.search).get('port') || DEFAULT_PORT;
   let BACKEND = '';
   let ONLINE = false;
 
-  // 后端地址解析：优先同源（被后端直接托管），否则指向本地端口
-  async function resolveBackend(){
+  const $ = id => document.getElementById(id);
+  const f_uid=$('f_uid'), f_cid=$('f_cid'), f_int=$('f_interval');
+  const targetsEl=$('targets'), addTargetBtn=$('addTarget');
+  const startBtn=$('startBtn'), refreshBtn=$('refreshBtn');
+  const cfgBody=$('cfgBody'), toggleBtn=$('toggleCfg');
+  const listEl=$('list'), statusEl=$('status'), bannerEl=$('banner'), dotEl=$('dot'), toastEl=$('toast');
+
+  // 监控目标列表（每个 {tid, aids}）；aids 为逗号分隔字符串
+  let targets = [];
+
+  // 配置持久化到浏览器 localStorage（打开页面自动回填）
+  const STORAGE_KEY='nga_monitor_cfg_v2';
+  function saveCfg(){
     try{
-      const r = await fetch('/api/status', {mode:'cors'});
-      if(r.ok){ const j = await r.json(); if(j && ('monitor_enabled' in j)) return ''; }
+      const o={ uid:f_uid.value.trim(), cid:f_cid.value.trim(),
+        interval:f_int.value,
+        targets: targets.map(t=>({tid:t.tid, aids:t.aids})),
+        collapsed: cfgBody.classList.contains('collapsed') };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(o));
     }catch(e){}
-    return 'http://localhost:' + portParam;
   }
-
-  async function api(path, opts){
-    const r = await fetch(BACKEND + path, Object.assign({headers:{'Content-Type':'application/json'}}, opts||{}));
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    return r.json();
-  }
-
-  function toast(msg){
-    toastEl.textContent = msg; toastEl.classList.add('show');
-    clearTimeout(toast._t); toast._t = setTimeout(()=>toastEl.classList.remove('show'), 2600);
-  }
-  function el(tag, cls, txt){ const e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
-  function escapeHtml(s){ return (s||'').replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
-  function fmt(ts){ return ts ? new Date(ts*1000).toLocaleString() : '—'; }
-
-  function copyText(t){
-    if(navigator.clipboard && navigator.clipboard.writeText){
-      navigator.clipboard.writeText(t).then(()=>toast('已复制启动命令')).catch(()=>fallbackCopy(t));
-    } else fallbackCopy(t);
-  }
-  function fallbackCopy(t){
-    const ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta);
-    ta.select(); try{document.execCommand('copy'); toast('已复制启动命令');}catch(e){ toast('请手动复制'); }
-    document.body.removeChild(ta);
-  }
-
-  // 由 file:// 页面推导启动命令（复制后 cmd / PowerShell 通用，无需 cd、无 &&）
-  function buildStartCmd(){
-    if(!/^file:/i.test(location.protocol)) return null;
-    let p = decodeURIComponent(location.href);
-    p = p.replace(/^file:\/\//i, '');
-    if (p.startsWith('/') && /^[A-Za-z]:/.test(p.slice(1))) p = p.slice(1);
-    p = p.replace(/[\\/]+$/, '');
-    const pagesDir = p.replace(/[\\/][^\\/]*$/, '');
-    const repoDir = pagesDir.replace(/[\\/][^\\/]*$/, '');
-    const isWin = /Win/i.test(navigator.platform) || /Windows/i.test(navigator.userAgent);
-    const scriptPath = repoDir + (isWin ? '\\monitor\\nga_monitor.py' : '/monitor/nga_monitor.py');
-    return isWin ? `python "${scriptPath}"` : `python3 "${scriptPath}"`;
-  }
-
-  // ============ 渲染骨架 ============
-  function renderSkeleton(){
-    app.innerHTML = '';
-    const h1 = el('h1');
-    h1.appendChild(el('span','dot off')); h1.firstChild.id='dot';
-    h1.appendChild(el('span',null,'NGA 大佬监控'));
-    h1.appendChild(el('span','pill', '全天候运行 · 24h'));
-    app.appendChild(h1);
-    app.appendChild(el('div','sub','大佬最近发言实时展示 —— 抓取、检测与企微推送均由后端 24 小时运行，本页只负责查看。'));
-    const banner = el('div','banner'); banner.id='banner'; app.appendChild(banner);
-    const status = el('div','statusline'); status.id='status'; app.appendChild(status);
-
-    const bar = el('div','bar'); bar.id='bar';
-    const refreshBtn = el('button',null,'🔄 立即刷新');
-    refreshBtn.addEventListener('click', refresh);
-    bar.appendChild(refreshBtn);
-    app.appendChild(bar);
-
-    const pc = el('div','card');
-    pc.appendChild(el('h2',null,'📜 大佬最近发言'));
-    const list = el('div'); list.id='list';
-    list.innerHTML = '<div class="empty">正在连接监控后端…</div>';
-    pc.appendChild(list);
-    app.appendChild(pc);
-  }
-
-  function setDot(on){ const d=document.getElementById('dot'); if(d) d.className='dot '+(on?'on':'off'); }
-
-  // 离线：显示启动指引卡（仅启动后端用，不含任何监控配置）
-  function renderOffline(){
-    if(document.getElementById('startcard')) return;
-    const sc = el('div','card start'); sc.id='startcard';
-    sc.appendChild(el('h2',null,'🚀 监控后端未运行'));
-    sc.appendChild(el('div','hint','本页只展示发言，监控与企微推送由后端脚本执行。请先启动后端：'));
-    const cmd = buildStartCmd() || 'python "你的项目路径/intraday-monitor/monitor/nga_monitor.py"';
-    const code = el('code'); code.textContent = cmd; sc.appendChild(code);
-    const btns = el('div','bar');
-    const copy = el('button',null,'📋 复制启动命令');
-    copy.addEventListener('click', ()=>copyText(cmd));
-    btns.appendChild(copy);
-    sc.appendChild(btns);
-    sc.appendChild(el('div','hint','监控目标（帖子ID / 作者ID）与 NGA 登录 ID 在 <code>monitor/nga_config.json</code> 中配置，修改后需重启脚本生效。'));
-    const bar = document.getElementById('bar');
-    app.insertBefore(sc, bar);
-  }
-
-  function removeOffline(){ const s=document.getElementById('startcard'); if(s) s.remove(); }
-
-  // ============ 连接 ============
-  async function connect(){
-    BACKEND = await resolveBackend();
+  function loadCfg(){
     try{
-      await api('/api/status');
-      ONLINE = true;
-      setDot(true);
-      removeOffline();
-      refresh();
-    }catch(e){
-      ONLINE = false;
-      setDot(false);
-      renderOffline();
-    }
+      const s=localStorage.getItem(STORAGE_KEY); if(!s) return false;
+      const o=JSON.parse(s);
+      f_uid.value=o.uid||''; f_cid.value=o.cid||'';
+      f_int.value=o.interval||'60';
+      targets = Array.isArray(o.targets) ? o.targets.map(t=>({tid:String(t.tid||''), aids:String(t.aids||'')})) : [];
+      if(!targets.length) targets=[{tid:'',aids:''}];
+      if(o.collapsed){ cfgBody.classList.add('collapsed'); toggleBtn.textContent='展开 ▼'; }
+      return !!(o.uid||o.cid||targets.some(t=>t.tid||t.aids));
+    }catch(e){ return false; }
   }
 
-  // ============ 展示（只读，不配置、不自动轮询） ============
-  async function refresh(){
-    if(!ONLINE){
-      const list=document.getElementById('list');
-      if(list) list.innerHTML='<div class="empty">尚未连接后端。请启动监控后端（见上方卡片）后点「立即刷新」。</div>';
-      return;
-    }
-    try{
-      const data = await api('/api/posts');
-      const st = data.status||{};
-      const banner = document.getElementById('banner');
-      if(st.last_error){
-        banner.classList.add('show');
-        banner.innerHTML = '⚠️ '+escapeHtml(st.last_error);
-      } else { banner.classList.remove('show'); }
-
-      setDot(st.monitor_enabled!==false);
-      const status=document.getElementById('status');
-      if(status){
-        const tids=(st.tids||[]).join(', ');
-        const aids=(st.authorids||[]).join(', ');
-        status.innerHTML =
-          `<span>监控目标：tid <b>${escapeHtml(tids)}</b> / 作者 <b>${escapeHtml(aids)}</b></span>`+
-          `<span>推送：<b style="color:${st.monitor_enabled!==false?'var(--green)':'var(--amber)'}">${st.monitor_enabled!==false?'开启':'关闭'}</b></span>`+
-          `<span>最近检查：${fmt(st.last_check)}</span>`+
-          `<span>上次推送：${fmt(st.last_push)}</span>`+
-          `<span>缓存：${st.cached} 条</span>`+
-          `<span>NGA登录：${st.has_cookie?'已填':'未填'}</span>`;
-      }
-      renderPosts(data.posts||[]);
-    }catch(e){
-      const list=document.getElementById('list');
-      if(list) list.innerHTML='<div class="empty">无法连接后端，请确认监控后端已运行（见上方启动指引）。</div>';
-    }
-  }
-
-  function renderPosts(posts){
-    const list=document.getElementById('list'); list.innerHTML='';
-    if(!posts.length){
-      list.innerHTML='<div class="empty">暂无发言数据。请确认 NGA 登录 ID 已配置、监控目标正确，然后点「立即刷新」。</div>';
-      return;
-    }
-    posts.forEach(p=>{
-      const card = el('div','post');
-      const meta = el('div','meta');
-      const left = el('span');
-      left.appendChild(el('span','author', p.author||('UID '+p.authorid)));
-      left.appendChild(document.createTextNode('  ·  UID '+p.authorid+'  ·  tid '+p.tid));
-      meta.appendChild(left);
-      meta.appendChild(el('span',null, p.time||''));
-      card.appendChild(meta);
-      const body = el('div','body'); body.textContent = p.content_text || p.content || '(无内容)';
-      card.appendChild(body);
-      const foot = el('div'); foot.style.marginTop='6px';
-      const link = el('a',null,'在 NGA 查看 →'); link.href = p.url||'#'; link.target='_blank'; link.rel='noopener';
-      foot.appendChild(link);
-      card.appendChild(foot);
-      list.appendChild(card);
+  // 渲染监控目标卡片
+  function renderTargets(){
+    targetsEl.innerHTML='';
+    targets.forEach((t,i)=>{
+      const card=document.createElement('div'); card.className='target-card';
+      const head=document.createElement('div'); head.className='target-head';
+      const idx=document.createElement('span'); idx.className='idx'; idx.textContent='帖子 '+(i+1);
+      const del=document.createElement('button'); del.className='del-btn'; del.textContent='删除';
+      del.onclick=()=>{ targets.splice(i,1); if(!targets.length) targets=[{tid:'',aids:''}]; renderTargets(); saveCfg(); validate(); };
+      head.appendChild(idx); head.appendChild(del);
+      const grid=document.createElement('div'); grid.className='target-grid';
+      const l1=document.createElement('label'); l1.innerHTML='帖子 ID (tid)<input placeholder="帖子 ID" inputmode="numeric">';
+      const l2=document.createElement('label'); l2.innerHTML='作者 ID<input placeholder="作者 ID，多个用逗号分隔">';
+      const inTid=l1.querySelector('input'); inTid.value=t.tid;
+      const inAids=l2.querySelector('input'); inAids.value=t.aids;
+      inTid.oninput=()=>{ targets[i].tid=inTid.value.trim(); saveCfg(); validate(); };
+      inAids.oninput=()=>{ targets[i].aids=inAids.value.trim(); saveCfg(); validate(); };
+      grid.appendChild(l1); grid.appendChild(l2);
+      card.appendChild(head); card.appendChild(grid);
+      targetsEl.appendChild(card);
     });
   }
 
-  renderSkeleton();
-  connect();
+  async function resolveBackend(){
+    try{ const r=await fetch('/api/status',{mode:'cors'}); if(r.ok){const j=await r.json(); if(j&&('monitor_enabled'in j)) return '';} }catch(e){}
+    return 'http://localhost:'+portParam;
+  }
+  async function api(path,opts){ const r=await fetch(BACKEND+path, Object.assign({headers:{'Content-Type':'application/json'}},opts||{})); if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); }
+  function toast(m){ toastEl.textContent=m; toastEl.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(()=>toastEl.classList.remove('show'),2600); }
+  function escapeHtml(s){ return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+  function fmt(ts){ return ts? new Date(ts*1000).toLocaleString():'—'; }
+  function setDot(on){ dotEl.className='dot '+(on?'on':'off'); }
+
+  function scriptPath(){
+    let p=decodeURIComponent(location.href).replace(/^file:\/\//i,'');
+    if(p.startsWith('/')&&/^[A-Za-z]:/.test(p.slice(1))) p=p.slice(1);
+    p=p.replace(/[\\/]+$/,'');
+    const pagesDir=p.replace(/[\\/][^\\/]*$/,'');
+    const repoDir=pagesDir.replace(/[\\/][^\\/]*$/,'');
+    const isWin=/Win/i.test(navigator.platform)||/Windows/i.test(navigator.userAgent);
+    return repoDir+(isWin?'\\monitor\\nga_monitor.py':'/monitor/nga_monitor.py');
+  }
+  function buildCmd(){
+    // exe 路径本身无空格，故不加引号；仅对含空格的脚本路径加引号。
+    // 这样在 PowerShell 和 cmd 里都能直接粘贴运行。
+    // UID/CID 一并发进命令（后端不再依赖 nga_config.json）。
+    const PY='C:\\Users\\41553\\.workbuddy\\binaries\\python\\versions\\3.13.12\\python.exe';
+    const sp=scriptPath();
+    let cmd=PY+' "'+sp+'"';
+    cmd+=' --uid='+f_uid.value.trim();
+    cmd+=' --cid='+f_cid.value.trim();
+    for(const t of targets){
+      if(t.tid && t.aids) cmd+=' --target='+t.tid+':'+t.aids;
+    }
+    cmd+=' --interval='+Math.max(5,parseInt(f_int.value)||60);
+    return cmd;
+  }
+  const LAUNCH_TIP='启动命令已复制 ✅ 打开 cmd（命令提示符）→ 右键粘贴 → 回车，即可启动监控并推送企微';
+
+  function copyText(t){
+    if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(t).then(()=>toast(LAUNCH_TIP)).catch(()=>fallback(t)); }
+    else fallback(t);
+  }
+  function fallback(t){ const ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta); ta.select(); try{document.execCommand('copy'); toast(LAUNCH_TIP);}catch(e){ toast('复制失败，请手动复制命令'); } document.body.removeChild(ta); }
+
+  function validate(){
+    const ok=f_uid.value.trim()&&f_cid.value.trim()&&targets.some(t=>t.tid.trim()&&t.aids.trim());
+    startBtn.disabled=!ok;
+  }
+
+  startBtn.addEventListener('click',()=>{
+    if(startBtn.disabled) return;
+    saveCfg();
+    copyText(buildCmd());
+  });
+  toggleBtn.addEventListener('click',()=>{
+    const collapsed=cfgBody.classList.toggle('collapsed');
+    toggleBtn.textContent=collapsed?'展开 ▼':'收起 ▲';
+    saveCfg();
+  });
+  addTargetBtn.addEventListener('click',()=>{ targets.push({tid:'',aids:''}); renderTargets(); validate(); });
+
+  // 静态字段（UID/CID/频率）也要实时触发校验与存盘
+  [f_uid,f_cid,f_int].forEach(el=>el.addEventListener('input',()=>{ saveCfg(); validate(); }));
+
+  async function connect(){
+    BACKEND=await resolveBackend();
+    try{ await api('/api/status'); ONLINE=true; setDot(true); }
+    catch(e){ ONLINE=false; setDot(false); }
+    return ONLINE;
+  }
+
+  // 把帖子按 tid 分组；优先按后端 targets 顺序排列，缺数据的帖子也占位
+  function groupPosts(posts, targetList){
+    const groups={};
+    (posts||[]).forEach(p=>{ const k=String(p.tid); (groups[k]=groups[k]||[]).push(p); });
+    const order=[];
+    (targetList||[]).forEach(t=>{ const k=String(t.tid); if(!(k in groups)) groups[k]=[]; if(!order.includes(k)) order.push(k); });
+    Object.keys(groups).forEach(tid=>{ if(!order.includes(tid)) order.push(tid); });
+    return {groups, order};
+  }
+
+  function renderGroups(groups, order){
+    listEl.innerHTML='';
+    if(!order.length){ listEl.innerHTML='<div class="empty">暂无监控目标或数据。请确认已添加帖子目标并启动后端。</div>'; return; }
+    order.forEach(tid=>{
+      const g=groups[tid]||[];
+      const title=(g[0]&&g[0].thread_title)||('tid '+tid);
+      const authorNames=[...new Set(g.map(p=>(p.author||p.authorid||'').trim()).filter(Boolean))];
+      const det=document.createElement('details'); det.className='thread'; det.open=true;
+      const sum=document.createElement('summary');
+      const left=document.createElement('div'); left.className='t-left';
+      const t1=document.createElement('div'); t1.className='t-title'; t1.textContent=title;
+      const t2=document.createElement('div'); t2.className='t-meta';
+      t2.innerHTML='作者：<b>'+(authorNames.join('、')||'配置中')+'</b> · '+g.length+' 条'+(g[0]?(' · uid '+g[0].authorid):'');
+      left.appendChild(t1); left.appendChild(t2);
+      const chev=document.createElement('span'); chev.className='chev'; chev.textContent='▼';
+      sum.appendChild(left); sum.appendChild(chev);
+      det.appendChild(sum);
+      const postsWrap=document.createElement('div'); postsWrap.className='posts';
+      const slice=g;
+      if(!slice.length){
+        const e=document.createElement('div'); e.className='empty'; e.style.padding='14px 0';
+        e.textContent='该帖子暂无匹配发言（可能作者暂无发言或帖子不存在）。';
+        postsWrap.appendChild(e);
+      }
+      slice.forEach(p=>{
+        const card=document.createElement('div'); card.className='post';
+        const meta=document.createElement('div'); meta.className='meta';
+        const a=document.createElement('span'); a.className='author'; a.textContent=p.author||('UID '+p.authorid);
+        const right=document.createElement('span'); right.style.display='inline-flex'; right.style.alignItems='center'; right.style.gap='8px';
+        const time=document.createElement('span'); time.textContent=p.time||'';
+        const link=document.createElement('a'); link.textContent='🔗'; link.href=p.url||'#'; link.target='_blank'; link.rel='noopener'; link.title='在 NGA 查看';
+        link.style.fontSize='12px';
+        right.appendChild(time); right.appendChild(link);
+        meta.appendChild(a); meta.appendChild(right);
+        const body=document.createElement('div'); body.className='body'; body.textContent=p.content_text||p.content||'(无内容)';
+        card.appendChild(meta); card.appendChild(body);
+        postsWrap.appendChild(card);
+      });
+      det.appendChild(postsWrap);
+      listEl.appendChild(det);
+    });
+  }
+
+  async function refresh(){
+    if(!ONLINE) await connect();
+    if(!ONLINE){
+      listEl.innerHTML='<div class="empty">尚未连接后端。配置已自动保存在本浏览器，无需重填；请先按上方启动命令在命令行运行监控后端，再点「立即刷新」。</div>';
+      statusEl.innerHTML='<span>后端：<b style="color:var(--amber)">未运行</b></span>';
+      return;
+    }
+    try{
+      const data=await api('/api/posts');
+      const st=data.status||{};
+      bannerEl.classList.toggle('show', !!st.last_error);
+      if(st.last_error) bannerEl.innerHTML='⚠️ '+escapeHtml(st.last_error);
+      setDot(st.monitor_enabled!==false);
+      statusEl.innerHTML=
+        '<span>后端：<b style="color:var(--green)">已连接</b></span>'+
+        ' 监控：<b style="color:'+(st.monitor_enabled!==false?'var(--green)':'var(--amber)')+'">'+(st.monitor_enabled!==false?'开启':'关闭')+'</b>'+
+        ' · 帖子目标 '+(st.targets?st.targets.length:0)+' 个'+
+        ' · 最近检查 '+fmt(st.last_check)+
+        ' · 上次推送 '+fmt(st.last_push)+
+        ' · 缓存 '+st.cached+' 条'+
+        ' · NGA登录 '+(st.has_cookie?'已填':'未填');
+      const {groups, order}=groupPosts(data.posts||[], st.targets);
+      renderGroups(groups, order);
+    }catch(e){
+      listEl.innerHTML='<div class="empty">无法连接后端，请确认监控已启动。</div>';
+    }
+  }
+
+  refreshBtn.addEventListener('click',refresh);
+  loadCfg();        // 打开页面先从本浏览器回填配置
+  if(!targets.length) targets=[{tid:'',aids:''}];   // 保证至少一张目标卡片可填
+  renderTargets();
+  validate();
+  connect().then(on=>{ if(on) refresh(); });
 })();
 </script>
 </body>
