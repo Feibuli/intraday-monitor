@@ -1249,7 +1249,7 @@
             // ── 启动监控 ──
             const launchMonitor = () => {
                 const psUrl = new URL('../monitor/start_monitor.ps1', location.href);
-                let psPath = psUrl.pathname;
+                let psPath = decodeURIComponent(psUrl.pathname);
                 if (psPath.startsWith('/') && /^[A-Za-z]:/.test(psPath.slice(1))) psPath = psPath.slice(1);
                 const cmd = `powershell -ExecutionPolicy Bypass -File "${psPath}"`;
                 navigator.clipboard.writeText(cmd).then(() => {
