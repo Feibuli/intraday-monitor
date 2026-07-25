@@ -72,7 +72,6 @@
  .toast.show{opacity:1}
  details summary{cursor:pointer;color:var(--blue);font-size:12px;margin-top:6px}
  details[open] summary{margin-bottom:8px}
- .cfgbar{display:block;cursor:pointer}
  .guide code{display:block;background:#06101c;border:1px solid var(--line);border-radius:10px;padding:11px 13px;
    color:var(--cyan);font-size:13px;margin:8px 0;word-break:break-all;font-family:"SFMono-Regular",Consolas,monospace}
  .pill{display:inline-block;font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:20px;padding:2px 9px;margin-left:8px}
@@ -80,17 +79,20 @@
 </head>
 <body>
 <div class="wrap" id="app">
-  <!-- 内容由 JS 根据后端连接状态注入（始终单页，不另开窗口） -->
+  <!-- 内容由 JS 始终注入：配置区 + 发言区（单页，不另开窗口）；后端未运行时显示启动指引 -->
 </div>
 <div class="toast" id="toast"></div>
 
 <script>
-(function(){
+(async function(){
   const app = document.getElementById('app');
   const toastEl = document.getElementById('toast');
   const DEFAULT_PORT = 8765;
   const portParam = new URLSearchParams(location.search).get('port') || DEFAULT_PORT;
   let BACKEND = '';            // '' 表示本页由 NGA 后端托管（用相对路径）；否则指向本地后端地址
+  let ONLINE = false;          // 后端是否已连接
+  let monOn = true;            // 监控开关（界面态）
+  const LS_KEY = 'nga_cfg_cache_v1';   // 离线时把配置暂存到浏览器，启动后端后自动同步
 
   // 解析真正的 NGA 后端地址：先试相对路径（本页由后端托管），失败则指向本地 8765
   async function resolveBackend(){
@@ -128,37 +130,79 @@
     document.body.removeChild(ta);
   }
 
-  // ============ 入口：先探测后端，再决定渲染完整界面还是启动指引（都在本页） ============
+  // 生成「启动后端」命令（兼容 file:// 与 http 打开、Windows/macOS/Linux）
+  function buildStartCmd(){
+    const isWin = /Win/.test(navigator.platform) || /Windows/.test(navigator.userAgent);
+    const href = decodeURIComponent(location.href);
+    const idx = href.indexOf('/pages/');
+    const repoRoot = idx>=0 ? href.slice(0, idx) : href;
+    let fsPath = repoRoot.replace(/^file:\/\/\//, '');
+    if(isWin) fsPath = fsPath.replace(/\//g, '\\');
+    const monitorDir = fsPath + (isWin ? '\\monitor' : '/monitor');
+    return isWin
+      ? `cd /d "${monitorDir}" && python nga_monitor.py`
+      : `cd "${monitorDir}" && python3 nga_monitor.py`;
+  }
+
+  // ============ 入口：始终渲染完整界面（配置 + 发言），再后台探测后端 ============
   async function boot(){
+    render();
+    connect();
+  }
+
+  // 探测后端：成功则加载真实配置与发言并隐藏指引；失败则显示启动指引（仍在本页）
+  async function connect(){
     BACKEND = await resolveBackend();
     try{
       await api('/api/status');
-      renderFull();
+      ONLINE = true;
+      hideGuide(); setDot(true);
+      await loadCfg();
+      await syncLocalToBackendIfNeeded();
+      await refresh();
     }catch(e){
-      renderGuide();
+      ONLINE = false;
+      showGuide(); setDot(false);
+      const status = document.getElementById('status');
+      if(status) status.innerHTML = '<span style="color:var(--amber)">● 后端未连接</span><span>请先按上方指引启动监控后端</span>';
     }
   }
 
-  // ============ 完整界面：配置 + 最近发言（均在同一个页面内） ============
-  function renderFull(){
+  function showGuide(){ const g=document.getElementById('guide'); if(g) g.style.display='block'; }
+  function hideGuide(){ const g=document.getElementById('guide'); if(g) g.style.display='none'; }
+  function setDot(on){ const d=document.getElementById('dot'); if(d) d.className='dot '+(on?'on':'off'); }
+
+  // ============ 始终渲染：配置区 + 发言区（单页，不另开窗口） ============
+  function render(){
     app.innerHTML = '';
-    const h1 = el('h1'); h1.appendChild(el('span','dot', '')); h1.appendChild(el('span',null,'NGA 大佬监控'));
+    const h1 = el('h1');
+    h1.appendChild(el('span','dot off')); h1.firstChild.id='dot';
+    h1.appendChild(el('span',null,'NGA 大佬监控'));
     h1.appendChild(el('span','pill', '全天候运行 · 24h'));
     app.appendChild(h1);
     app.appendChild(el('div','sub','监控指定帖子下大佬的发言，新发言自动推送企业微信（页面仅展示快照，推送由后端脚本执行）'));
 
     const banner = el('div','banner'); banner.id='banner'; app.appendChild(banner);
-
     const status = el('div','statusline'); status.id='status'; app.appendChild(status);
 
-    // 配置卡片
+    // 离线启动指引卡（仅后端未运行时显示）
+    const guide = el('div','card guide'); guide.id='guide'; guide.style.display='none';
+    guide.appendChild(el('h2',null,'🚀 启动后端（只需一次）'));
+    guide.appendChild(el('div','hint','下方为启动命令。复制后在命令行粘贴回车即可（脚本为纯标准库，无需 pip 安装）。启动后点「重新连接」，本页会自动填入配置并展示大佬发言。'));
+    const code = el('code'); code.id='cmd'; code.textContent = buildStartCmd(); guide.appendChild(code);
+    const gbtns = el('div','btns');
+    const copy = el('button',null,'复制启动命令');
+    copy.addEventListener('click', ()=>copyText(document.getElementById('cmd').textContent));
+    const reconn = el('button','ghost','重新连接');
+    reconn.addEventListener('click', ()=>{ toast('正在重新连接…'); connect(); });
+    gbtns.appendChild(copy); gbtns.appendChild(reconn);
+    guide.appendChild(gbtns);
+    app.appendChild(guide);
+
+    // 配置卡片（始终显示：这就是「配置 id 的地方」）
     const cfg = el('div','card');
-    const bar = el('div','cfgbar');
-    bar.innerHTML = '<h2 style="margin:0">⚙️ 配置</h2>';
-    const toggle = el('span'); toggle.textContent='点击展开/收起 ▾'; toggle.style.color='var(--muted)'; toggle.style.fontSize='12px';
-    bar.appendChild(toggle);
-    cfg.appendChild(bar);
-    const body = el('div'); body.id='cfgbody'; body.style.marginTop='12px';
+    cfg.appendChild(el('h2',null,'⚙️ 配置（帖子ID / 作者ID / 频率 / 条数 / Cookie）'));
+    const body = el('div'); body.id='cfgbody'; body.style.marginTop='6px';
     cfg.appendChild(body);
     app.appendChild(cfg);
 
@@ -171,7 +215,7 @@
       </div>
       <div class="row">
         <div class="field" style="flex:0 0 200px"><label>监控推送</label>
-          <div class="toggle" id="f_mon"><span class="switch"></span><span id="f_mon_txt">开启</span></div></div>
+          <div class="toggle on" id="f_mon"><span class="switch"></span><span id="f_mon_txt">开启</span></div></div>
         <div class="field" style="flex:0 0 160px"><label>抓取频率（秒）</label>
           <input type="number" id="f_int" min="5" value="60"></div>
         <div class="field" style="flex:0 0 160px"><label>展示条数</label>
@@ -182,7 +226,7 @@
         <div class="hint">
           获取方式：浏览器登录 NGA → 打开目标帖子 → F12 开发者工具 → Network(网络) → 任意请求 →
           复制 Request Headers 里的 <code>Cookie</code> 整行（含 <code>ngaPassportUid</code> 与 <code>ngaPassportCid</code>）。
-          仅存于本地 config，不会上传。
+          仅存于本地，不会上传。
         </div>
         <details><summary>为什么必须要 Cookie？</summary>
           <div class="hint">NGA 对未登录访问返回「权限不足」。带登录 Cookie 才能读取该帖下大佬的发言。Cookie 只在你本机使用。</div>
@@ -194,10 +238,6 @@
         <button class="ghost" id="refresh">立即刷新</button>
       </div>`;
 
-    bar.addEventListener('click', ()=>{ body.style.display = (body.style.display==='none'?'block':'none'); });
-    body.style.display = 'none';
-
-    let monOn = true;
     const monEl = body.querySelector('#f_mon');
     const monTxt = body.querySelector('#f_mon_txt');
     monEl.addEventListener('click', ()=>{ monOn=!monOn; monEl.classList.toggle('on',monOn); monTxt.textContent=monOn?'开启':'关闭'; });
@@ -206,15 +246,32 @@
     body.querySelector('#test').addEventListener('click', testConn);
     body.querySelector('#refresh').addEventListener('click', refresh);
 
-    // 帖子列表卡片
+    // 帖子列表卡片（始终显示）
     const pc = el('div','card'); pc.appendChild(el('h2',null,'📜 大佬最近发言（当前快照）'));
     const list = el('div'); list.id='list'; pc.appendChild(list);
+    list.innerHTML = '<div class="empty">尚未连接后端。启动后端并点「重新连接」后，这里会显示大佬最近发言。</div>';
     app.appendChild(pc);
 
-    loadCfg();
-    refresh();
-    // 注意：页面不自动轮询。只在打开/手动「立即刷新」时拉取一次当前最近 30 条；
-    // 新发言的实时检测与企微推送完全由后端脚本负责。
+    // 离线时预填浏览器缓存，保证「配置 id 的地方」始终可见且有值
+    loadLocalCache();
+  }
+
+  // 离线缓存：把配置存入浏览器 localStorage
+  function cacheLocal(cfg){
+    try{ localStorage.setItem(LS_KEY, JSON.stringify(cfg)); }catch(e){}
+  }
+  function loadLocalCache(){
+    try{
+      const raw = localStorage.getItem(LS_KEY);
+      if(!raw) return;
+      const c = JSON.parse(raw);
+      if(c.tid!=null) document.getElementById('f_tid').value = Array.isArray(c.tid)?c.tid.join(','):c.tid;
+      if(c.authorids!=null) document.getElementById('f_aids').value = Array.isArray(c.authorids)?c.authorids.join(', '):c.authorids;
+      if(c.refresh_interval) document.getElementById('f_int').value = c.refresh_interval;
+      if(c.display_count) document.getElementById('f_cnt').value = c.display_count;
+      if(c.nga_cookie) document.getElementById('f_cookie').value = c.nga_cookie;
+      if(c.monitor_enabled===false){ monOn=false; const m=document.getElementById('f_mon'); m.classList.remove('on'); document.getElementById('f_mon_txt').textContent='关闭'; }
+    }catch(e){}
   }
 
   async function loadCfg(){
@@ -225,30 +282,51 @@
       document.getElementById('f_int').value = c.refresh_interval||60;
       document.getElementById('f_cnt').value = c.display_count||30;
       document.getElementById('f_cookie').value = c.nga_cookie||'';
-      const mon = c.monitor_enabled!==false;
-      document.getElementById('f_mon').classList.toggle('on', mon);
-      document.getElementById('f_mon_txt').textContent = mon?'开启':'关闭';
-    }catch(e){ /* ignore */ }
+      monOn = c.monitor_enabled!==false;
+      const monEl = document.getElementById('f_mon');
+      monEl.classList.toggle('on', monOn);
+      document.getElementById('f_mon_txt').textContent = monOn?'开启':'关闭';
+      cacheLocal(c);   // 在线配置也缓存，方便离线预填
+    }catch(e){ /* 离线时表单保留 localStorage 预填值 */ }
+  }
+
+  // 后端刚连上、但后端 cookie 为空而本地有缓存时，把本地配置同步到后端
+  async function syncLocalToBackendIfNeeded(){
+    try{
+      const raw = localStorage.getItem(LS_KEY);
+      if(!raw) return;
+      const cached = JSON.parse(raw);
+      if(!cached.nga_cookie) return;
+      const c = await api('/api/config');
+      if(c && !c.nga_cookie){
+        await api('/api/config', {method:'POST', body:JSON.stringify(cached)});
+      }
+    }catch(e){}
   }
 
   async function saveCfg(){
-    const monEl = document.getElementById('f_mon');
     const payload = {
       tid: document.getElementById('f_tid').value.trim(),
       authorids: document.getElementById('f_aids').value.trim(),
-      monitor_enabled: monEl.classList.contains('on'),
+      monitor_enabled: document.getElementById('f_mon').classList.contains('on'),
       refresh_interval: parseInt(document.getElementById('f_int').value)||60,
       display_count: parseInt(document.getElementById('f_cnt').value)||30,
       nga_cookie: document.getElementById('f_cookie').value.trim(),
     };
-    try{
-      await api('/api/config', {method:'POST', body:JSON.stringify(payload)});
-      toast('配置已保存，后台正在重新抓取…');
-      refresh();
-    }catch(e){ toast('保存失败：'+e.message); }
+    cacheLocal(payload);   // 永远先存本地，避免丢失
+    if(ONLINE){
+      try{
+        await api('/api/config', {method:'POST', body:JSON.stringify(payload)});
+        toast('配置已保存，后台正在重新抓取…');
+        refresh();
+      }catch(e){ toast('保存失败：'+e.message); }
+    }else{
+      toast('已存到本地浏览器，启动后端后点「重新连接」会自动同步');
+    }
   }
 
   async function testConn(){
+    if(!ONLINE){ toast('请先启动并连接后端'); return; }
     toast('正在测试连接…');
     try{
       const r = await api('/api/test');
@@ -261,6 +339,11 @@
 
   // 手动拉取一次最新快照（不自动轮询）
   async function refresh(){
+    if(!ONLINE){
+      const list = document.getElementById('list');
+      if(list) list.innerHTML = '<div class="empty">尚未连接后端。启动后端并点「重新连接」后，这里会显示大佬最近发言。</div>';
+      return;
+    }
     try{
       const data = await api('/api/posts');
       const st = data.status||{};
@@ -268,10 +351,10 @@
       if(st.last_error){
         banner.classList.add('show');
         banner.innerHTML = '⚠️ '+escapeHtml(st.last_error) +
-          (st.has_cookie? '' : '<br>提示：请在「配置」中填写 NGA 登录 Cookie。');
+          (st.has_cookie? '' : '<br>提示：请在上方「配置」中填写 NGA 登录 Cookie。');
       } else { banner.classList.remove('show'); }
 
-      const dot = document.querySelector('h1 .dot');
+      const dot = document.getElementById('dot');
       if(dot){ dot.className = 'dot ' + (st.monitor_enabled?'on':'off'); }
       const status = document.getElementById('status');
       if(status){
@@ -286,14 +369,14 @@
       renderPosts(data.posts||[]);
     }catch(e){
       const list = document.getElementById('list');
-      if(list) list.innerHTML = '<div class="empty">无法连接后端，请确认监控后端已启动。</div>';
+      if(list) list.innerHTML = '<div class="empty">无法连接后端，请确认监控后端已启动并点「重新连接」。</div>';
     }
   }
 
   function renderPosts(posts){
     const list = document.getElementById('list');
     list.innerHTML = '';
-    if(!posts.length){ list.innerHTML = '<div class="empty">暂无发言数据。请确认 Cookie 已填写且配置正确。</div>'; return; }
+    if(!posts.length){ list.innerHTML = '<div class="empty">暂无发言数据。请确认 Cookie 已填写且配置正确，然后点「立即刷新」。</div>'; return; }
     posts.forEach(p=>{
       const card = el('div','post');
       const meta = el('div','meta');
@@ -308,50 +391,6 @@
       const foot = el('div'); foot.style.marginTop='6px'; foot.appendChild(link); card.appendChild(foot);
       list.appendChild(card);
     });
-  }
-
-  // ============ 启动指引（后端未运行时，仍在本页内显示，不另开窗口） ============
-  function renderGuide(){
-    const port = portParam;
-    const isWin = /Win/.test(navigator.platform) || /Windows/.test(navigator.userAgent);
-    const href = decodeURIComponent(location.href);
-    const idx = href.indexOf('/pages/');
-    const repoRoot = idx>=0 ? href.slice(0, idx) : href;
-    let fsPath = repoRoot.replace(/^file:\/\/\//, '');
-    if(isWin) fsPath = fsPath.replace(/\//g, '\\');
-    const monitorDir = fsPath + (isWin ? '\\monitor' : '/monitor');
-    const cmd = isWin
-      ? `cd /d "${monitorDir}" && python nga_monitor.py`
-      : `cd "${monitorDir}" && python3 nga_monitor.py`;
-
-    app.innerHTML = '';
-    const h1 = el('h1'); h1.appendChild(el('span','dot off')); h1.appendChild(el('span',null,'NGA 大佬监控'));
-    h1.appendChild(el('span','pill', '全天候运行 · 24h'));
-    app.appendChild(h1);
-    app.appendChild(el('div','sub','监控后端尚未启动。本页会持续探测，启动后自动切换为控制台（无需另开窗口）。'));
-
-    const card = el('div','card guide');
-    card.appendChild(el('h2',null,'🚀 启动后端（只需一次）'));
-    card.appendChild(el('div','hint','复制下面命令，打开命令行（Windows 用 cmd，macOS/Linux 用终端）粘贴回车即可。脚本为纯标准库，无需 pip 安装任何依赖。'));
-    const code = el('code'); code.textContent = cmd; card.appendChild(code);
-    const btns = el('div','btns');
-    const copy = el('button',null,'复制启动命令');
-    copy.addEventListener('click', ()=>copyText(cmd));
-    const reconn = el('button','ghost',null,'重新连接');
-    reconn.addEventListener('click', ()=>{ toast('正在重新连接…'); boot(); });
-    btns.appendChild(copy); btns.appendChild(reconn);
-    card.appendChild(btns);
-    app.appendChild(card);
-
-    const tip = el('div','card');
-    tip.innerHTML = '<h2>📌 使用前准备</h2>'+
-      '<div class="hint">1. 本机需安装 <code>Python 3</code>（见仓库 README 第 0 步）。<br>'+
-      '2. 启动后页面会要求填写 <code>NGA 登录 Cookie</code>（浏览器登录 NGA 后从开发者工具复制）。<br>'+
-      '3. 之后在页面内配置 帖子ID / 作者ID / 抓取频率 / 展示条数 即可。<br>'+
-      '4. 监控 24 小时不间断，新发言由后端脚本推送企业微信；本页只展示当前最近发言快照（不自动刷新，点「重新连接」或刷新浏览器即可更新）。</div>';
-    app.appendChild(tip);
-
-    // 注：本页不自动轮询。后端启动后，点击「重新连接」按钮或刷新浏览器即可切换为控制台。
   }
 
   boot();
