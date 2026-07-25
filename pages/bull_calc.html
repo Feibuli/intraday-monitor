@@ -1,0 +1,2298 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>牛股计算器</title>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus@2.6.3/dist/index.css">
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/theme-chalk/dark/css-vars.css">
+    <script src="https://unpkg.com/vue@3.4.21/dist/vue.global.js"></script>
+    <script src="https://unpkg.com/element-plus@2.6.3/dist/index.full.min.js"></script>
+    <script src="https://unpkg.com/element-plus/dist/locale/zh-cn.js"></script>
+    <script src="https://unpkg.com/sortablejs@1.15.2/Sortable.min.js"></script>
+    
+    <svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+        <symbol id="icon-add" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></symbol>
+        <symbol id="icon-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></symbol>
+        <symbol id="icon-import" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></symbol>
+        <symbol id="icon-export" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></symbol>
+        <symbol id="icon-delete" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></symbol>
+        <symbol id="icon-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></symbol>
+        <symbol id="icon-monitor" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></symbol>
+        <symbol id="icon-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><rect x="9" y="9" width="6" height="6"></rect></symbol>
+        <symbol id="icon-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></symbol>
+        <symbol id="icon-trend" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"></polyline><polyline points="17 6 23 6 23 12"></polyline></symbol>
+    </svg>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600&display=swap');
+
+        .icon { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; }
+        .disclaimer-dialog .el-dialog__header { border-bottom: 1px solid var(--border-color); }
+        .disclaimer-dialog .el-dialog__title { color: var(--warning); font-weight: 600; }
+        .help-dialog .el-dialog {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+        }
+        .help-dialog .el-dialog__header { border-bottom: 1px solid var(--border-color); padding: 18px 22px 16px; }
+        .help-dialog .el-dialog__title { color: var(--accent); font-weight: 600; font-size: 18px; }
+        .help-dialog .el-dialog__body { padding: 20px 24px 18px; max-height: 72vh; overflow-y: auto; }
+        .help-dialog .el-dialog__footer { border-top: 1px solid var(--border-color); padding: 14px 24px 18px; }
+        .help-content { color: var(--text-primary); font-size: 14px; line-height: 1.8; }
+        .help-section + .help-section { margin-top: 18px; }
+        .help-section h4 { margin: 0 0 10px; font-size: 15px; color: var(--accent); }
+        .help-section p { margin: 6px 0; }
+        .help-note { margin-top: 10px; padding: 10px 12px; border-radius: 8px; background: rgba(74, 158, 255, 0.08); border: 1px solid rgba(74, 158, 255, 0.18); color: var(--text-secondary); }
+        .help-green { color: #86efac; }
+        .help-orange { color: #fdba74; }
+        .help-red { color: #fca5a5; }
+        .help-blue { color: #93c5fd; }
+
+        :root {
+            --bg-primary: #0a0e17;
+            --bg-card: #121a2b;
+            --bg-row: #0d1421;
+            --bg-row-alt: #111b2f;
+            --bg-input: #101827;
+            --text-primary: #edf3ff;
+            --text-secondary: #b2bfd3;
+            --text-muted: #93a4bb;
+            --text-placeholder: #72839c;
+            --up-color: #ff4d4f;
+            --down-color: #52c41a;
+            --border-color: #2b3a52;
+            --border-strong: #40506a;
+            --accent: #4a9eff;
+            --btn-bg: #1a2940;
+            --btn-hover: #2a3d5c;
+            --warning: #fa8c16;
+        }
+
+        body { 
+            background-color: var(--bg-primary); 
+            margin: 0; padding: 16px; 
+            font-family: "Noto Sans SC", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            height: 100vh; box-sizing: border-box; overflow: hidden; 
+            color: var(--text-primary);
+            font-size: 14px;
+            line-height: 1.6;
+            letter-spacing: 0.1px;
+            font-variant-numeric: tabular-nums;
+            -webkit-font-smoothing: antialiased;
+            text-rendering: optimizeLegibility;
+        }
+
+        /* 背景装饰 */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background:
+                radial-gradient(ellipse at 20% 20%, rgba(74, 158, 255, 0.03) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 80%, rgba(255, 77, 79, 0.02) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* Element Plus Dark Mode Overrides */
+        html.dark {
+            --el-bg-color: var(--bg-primary);
+            --el-bg-color-overlay: var(--bg-card);
+            --el-text-color-primary: var(--text-primary);
+            --el-text-color-regular: var(--text-secondary);
+            --el-text-color-secondary: var(--text-secondary);
+            --el-text-color-placeholder: var(--text-placeholder);
+            --el-border-color: var(--border-color);
+            --el-border-color-light: var(--border-color);
+            --el-border-color-lighter: var(--border-color);
+            --el-fill-color-blank: var(--bg-card);
+            --el-fill-color: var(--bg-input);
+            --el-fill-color-light: rgba(74, 158, 255, 0.08);
+            --el-fill-color-lighter: rgba(74, 158, 255, 0.12);
+            --el-input-bg-color: var(--bg-input);
+            --el-input-border-color: var(--border-strong);
+            --el-input-hover-border-color: #69b0ff;
+            --el-input-focus-border-color: var(--accent);
+            --el-color-primary: var(--accent);
+            --el-color-danger: var(--up-color); /* 娑ㄧ孩 */
+            --el-color-success: var(--down-color); /* 璺岀豢 */
+            --el-color-warning: var(--warning);
+        }
+
+        #app { height: 100%; display: flex; flex-direction: column; position: relative; z-index: 1; }
+        
+        .app-container { 
+            flex: 1; display: flex; flex-direction: column; 
+            background: transparent;
+            padding: 0; 
+            overflow: hidden; position: relative; 
+        }
+
+        .pc-table-view { 
+            display: flex; 
+            flex-direction: column; 
+            height: 100%; 
+            overflow: hidden;
+        }
+
+        .control-bar {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            flex-shrink: 0;
+        }
+
+        .control-bar h2 {
+            font-size: 19px;
+            font-weight: 600;
+            color: var(--accent);
+            margin: 0;
+            margin-right: auto;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            line-height: 1.4;
+        }
+
+        .control-bar h2::before {
+            content: '📈';
+        }
+
+        .header-sub { font-size: 13px; color: var(--text-muted); font-weight: 500; margin-left: 8px; }
+        .auto-refresh-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 68px; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 1.6; border: 1px solid transparent; }
+        .auto-refresh-badge.running { color: #dcfce7; background: rgba(34, 197, 94, 0.16); border-color: rgba(74, 222, 128, 0.28); }
+        .auto-refresh-badge.paused { color: #ffedd5; background: rgba(249, 115, 22, 0.16); border-color: rgba(251, 146, 60, 0.28); }
+        .auto-refresh-badge.off { color: #d1d5db; background: rgba(100, 116, 139, 0.18); border-color: rgba(148, 163, 184, 0.24); }
+
+        .btn-group-wrapper { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        .refresh-settings { display: flex; align-items: center; gap: 10px 12px; flex-wrap: wrap; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 8px; background: rgba(16, 24, 39, 0.65); }
+        .refresh-toggle { display: inline-flex; align-items: center; min-height: 32px; margin-right: 0; }
+        .help-refresh-controls .refresh-toggle { min-height: 34px; }
+        .refresh-toggle .el-checkbox__label { color: var(--text-primary) !important; font-size: 13px; padding-left: 6px; }
+        .refresh-toggle.is-checked .el-checkbox__label { color: #dbeafe !important; }
+        .refresh-interval { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; color: var(--text-secondary); font-size: 13px; white-space: nowrap; }
+        .refresh-interval .el-input { width: 76px; }
+        .help-refresh-controls { margin-top: 12px; align-items: center; }
+        .help-refresh-controls .refresh-interval .el-input__wrapper { min-height: 32px; }
+        .help-refresh-controls .refresh-status-note { width: 100%; white-space: normal; margin-top: 2px; }
+        .refresh-status-note { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+        .refresh-range-note { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+        .index-overview-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+            flex-shrink: 0;
+        }
+        .index-overview-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+        .index-overview-header.compact {
+            margin-bottom: 0;
+            flex-wrap: nowrap;
+        }
+        .index-overview-title-wrap {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+            flex-wrap: wrap;
+        }
+        .index-overview-actions {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-left: auto;
+        }
+        .index-overview-title {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            color: #dbeafe;
+            font-size: 15px;
+            font-weight: 600;
+        }
+        .index-overview-title::before {
+            content: '\1F4CA';
+        }
+        .index-overview-sub {
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+        .index-overview-turnover {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 3px 9px;
+            border-radius: 999px;
+            background: rgba(250, 204, 21, 0.10);
+            border: 1px solid rgba(250, 204, 21, 0.22);
+            font-variant-numeric: tabular-nums;
+        }
+        .index-overview-turnover-label {
+            color: var(--text-muted);
+        }
+        .index-overview-turnover-value {
+            color: #fa8c16;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+        .index-overview-summary {
+            flex: 1;
+            min-width: 0;
+            color: #dbeafe;
+            font-size: 13px;
+            line-height: 1.6;
+            white-space: nowrap;
+            overflow-x: auto;
+            overflow-y: hidden;
+            padding-bottom: 2px;
+            scrollbar-width: thin;
+        }
+        .index-overview-summary-title {
+            color: var(--text-primary);
+            font-weight: 700;
+        }
+        .index-overview-summary-name {
+            color: #dbeafe;
+            font-weight: 600;
+        }
+        .index-overview-summary-value {
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+        }
+        .index-overview-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+        }
+        .index-card {
+            background: linear-gradient(180deg, rgba(19, 28, 46, 0.95) 0%, rgba(10, 16, 29, 0.95) 100%);
+            border: 1px solid rgba(96, 165, 250, 0.14);
+            border-radius: 12px;
+            padding: 12px;
+            min-width: 0;
+        }
+        .index-card-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 10px;
+        }
+        .index-card-name-wrap {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            min-width: 0;
+        }
+        .index-card-name {
+            color: var(--text-primary);
+            font-size: 14px;
+            font-weight: 600;
+            line-height: 1.2;
+        }
+        .index-card-code {
+            color: #8fb9ff;
+            font-size: 12px;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .index-card-values {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 4px;
+            text-align: right;
+            flex-shrink: 0;
+        }
+        .index-card-price {
+            font-size: 22px;
+            line-height: 1;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+        .index-card-change {
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .index-card-chart {
+            margin-bottom: 10px;
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid rgba(148, 163, 184, 0.1);
+            background: rgba(15, 23, 42, 0.72);
+            cursor: zoom-in;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+        }
+        .index-card-chart:hover {
+            border-color: rgba(96, 165, 250, 0.28);
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.24);
+            transform: translateY(-1px);
+        }
+        .index-card-chart img {
+            display: block;
+            width: 100%;
+            height: 140px;
+            object-fit: contain;
+            background: rgba(2, 6, 23, 0.2);
+        }
+        .index-card-metrics {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px 12px;
+            font-size: 12px;
+        }
+        .index-metric {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            min-width: 0;
+        }
+        .index-metric-label {
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+        .index-metric-value {
+            color: var(--text-primary);
+            font-variant-numeric: tabular-nums;
+            text-align: right;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .index-overview-grid.text-only .index-card {
+            padding-top: 10px;
+            padding-bottom: 10px;
+        }
+        .index-overview-grid.text-only .index-card-head {
+            margin-bottom: 8px;
+        }
+        .index-overview-grid.text-only .index-card-chart {
+            display: none;
+        }
+        .chart-dialog-metrics {
+            margin-top: 12px;
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px 12px;
+        }
+        .chart-dialog-metric {
+            padding: 10px 12px;
+            border-radius: 10px;
+            border: 1px solid rgba(148, 163, 184, 0.12);
+            background: rgba(15, 23, 42, 0.58);
+        }
+        .chart-dialog-metric-label {
+            display: block;
+            color: var(--text-muted);
+            font-size: 12px;
+            margin-bottom: 6px;
+        }
+        .chart-dialog-metric-value {
+            display: block;
+            color: var(--text-primary);
+            font-size: 15px;
+            font-weight: 600;
+            line-height: 1.3;
+            font-variant-numeric: tabular-nums;
+            word-break: break-all;
+        }
+
+        /* Custom Buttons to match index.html style */
+        .el-button {
+            background: var(--btn-bg) !important;
+            border: 1px solid var(--border-color) !important;
+            color: var(--text-primary) !important;
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .el-button:hover {
+            background: var(--btn-hover) !important;
+            border-color: var(--accent) !important;
+        }
+        .el-button--primary {
+            background: var(--accent) !important;
+            border-color: var(--accent) !important;
+            color: #fff !important;
+        }
+        .el-button--primary:hover {
+            filter: brightness(1.1);
+        }
+        .el-button--danger {
+            color: var(--up-color) !important;
+            border-color: var(--up-color) !important;
+            background: transparent !important;
+        }
+        .el-button--danger:hover {
+            background: var(--up-color) !important;
+            color: #fff !important;
+        }
+        
+        /* Table Styles matching index.html */
+        .el-table {
+            --el-table-bg-color: transparent;
+            --el-table-tr-bg-color: var(--bg-row);
+            --el-table-header-bg-color: var(--bg-card);
+            --el-table-border-color: var(--border-color);
+            --el-table-row-hover-bg-color: rgba(74, 158, 255, 0.15);
+            --el-table-text-color: var(--text-primary);
+            --el-table-header-text-color: var(--text-secondary);
+            background-color: transparent !important;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            table-layout: fixed;
+            width: 100%;
+        }
+        
+        .el-table th.el-table__cell {
+            background: linear-gradient(180deg, #1a2940 0%, #121a2b 100%) !important;
+            padding: 13px 10px;
+            text-align: center;
+            font-weight: 600;
+            font-size: 12px;
+            color: #c9d5e7;
+            border-bottom: 2px solid var(--accent) !important;
+            white-space: nowrap;
+        }
+        
+        .el-table td.el-table__cell {
+            padding: 11px 10px;
+            text-align: center;
+            border-bottom: 1px solid var(--border-color) !important;
+            font-size: 13px;
+            background-color: transparent !important;
+            white-space: nowrap;
+        }
+
+        .el-table .cell {
+            color: var(--text-primary);
+            line-height: 1.5;
+        }
+
+        .el-table__row:nth-child(even) { background-color: var(--bg-row-alt); }
+        .el-table__row:nth-child(odd) { background-color: var(--bg-row); }
+
+        .el-table__body tr:hover td { background-color: rgba(74, 158, 255, 0.15) !important; }
+        .el-table__body tr.hover td { background-color: rgba(74, 158, 255, 0.15) !important; }
+
+        .el-table .warning-row td { background-color: rgba(250, 140, 22, 0.1) !important; }
+        .el-table .danger-row td { background-color: rgba(255, 77, 79, 0.1) !important; }
+
+        /* Input Overrides for Editable Cells */
+        .el-input {
+            --el-input-border-color: var(--border-strong);
+            --el-input-hover-border-color: #69b0ff;
+            --el-input-focus-border-color: var(--accent);
+        }
+        .el-input__wrapper {
+            background-color: var(--bg-input) !important;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02), 0 0 0 1px var(--border-strong) !important;
+            padding: 0 6px !important;
+            border: 1px solid transparent !important;
+            border-radius: 6px;
+            transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+        }
+        .el-input__inner { 
+            color: var(--text-primary) !important; 
+            text-align: center !important;
+            font-family: "JetBrains Mono", "Noto Sans SC", "Consolas", monospace;
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .el-input__inner::placeholder {
+            color: var(--text-placeholder) !important;
+        }
+        .control-bar .el-input__inner {
+            text-align: left !important;
+        }
+        .el-input__wrapper:hover {
+            background-color: #141f32 !important;
+            border-color: rgba(105, 176, 255, 0.35) !important;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03), 0 0 0 1px rgba(105, 176, 255, 0.42) !important;
+        }
+        .el-input__wrapper.is-focus {
+            background-color: rgba(74, 158, 255, 0.12) !important;
+            border-color: rgba(74, 158, 255, 0.5) !important;
+            box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.22), inset 0 0 0 1px rgba(116, 187, 255, 0.35) !important;
+        }
+
+        /* Colors */
+        .up-text { color: var(--up-color); font-weight: 600; }
+        .down-text { color: var(--down-color); font-weight: 600; }
+        .fib-val {
+            font-family: 'JetBrains Mono', monospace;
+            color: #c3cfdf;
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 6px;
+            transition: all 0.2s ease;
+        }
+        .fib-highlight-382,
+        .fib-highlight-618 {
+            font-weight: 600;
+        }
+        .fib-highlight-382 {
+            color: #ddffe7;
+            background: linear-gradient(180deg, rgba(82, 196, 26, 0.2) 0%, rgba(22, 163, 74, 0.14) 100%);
+            box-shadow: inset 0 0 0 1px rgba(134, 239, 172, 0.36), 0 0 0 1px rgba(34, 197, 94, 0.22);
+        }
+        .fib-highlight-618 {
+            color: #fff1df;
+            background: linear-gradient(180deg, rgba(250, 140, 22, 0.2) 0%, rgba(249, 115, 22, 0.14) 100%);
+            box-shadow: inset 0 0 0 1px rgba(253, 186, 116, 0.36), 0 0 0 1px rgba(249, 115, 22, 0.22);
+        }
+        .stock-name { color: #f3f6fc; font-weight: 500; }
+        .drag-handle { cursor: grab; font-size: 14px; color: #e2e8f0; font-weight: 600; }
+        .drag-handle:active { cursor: grabbing; }
+        .drag-column { cursor: grab; }
+        .drag-column:active { cursor: grabbing; }
+        .chart-price-trigger {
+            display: inline-flex;
+            align-items: center;
+            cursor: zoom-in;
+            padding: 2px 4px;
+            margin: -2px -4px;
+            border-radius: 6px;
+            transition: background 0.2s ease, box-shadow 0.2s ease;
+        }
+        .chart-price-trigger:hover {
+            background: rgba(96, 165, 250, 0.12);
+            box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.18);
+        }
+        .chart-hover-popover {
+            position: fixed;
+            z-index: 4000;
+            width: 440px;
+            max-width: calc(100vw - 24px);
+            padding: 12px;
+            border-radius: 14px;
+            border: 1px solid rgba(96, 165, 250, 0.22);
+            background: rgba(11, 18, 32, 0.96);
+            box-shadow: 0 20px 48px rgba(0, 0, 0, 0.42);
+            backdrop-filter: blur(10px);
+        }
+        .chart-hover-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 10px;
+        }
+        .chart-hover-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+            color: var(--text-primary);
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .chart-hover-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .chart-hover-code {
+            color: #8fb9ff;
+            font-size: 12px;
+            font-family: 'JetBrains Mono', monospace;
+            white-space: nowrap;
+        }
+        .chart-hover-tabs {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+        .chart-tab-btn {
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            background: rgba(30, 41, 59, 0.92);
+            color: var(--text-secondary);
+            padding: 5px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .chart-tab-btn:hover {
+            color: var(--text-primary);
+            border-color: rgba(96, 165, 250, 0.34);
+        }
+        .chart-tab-btn.active {
+            color: #ffffff;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.92) 0%, rgba(37, 99, 235, 0.92) 100%);
+            border-color: rgba(96, 165, 250, 0.65);
+            box-shadow: 0 8px 18px rgba(37, 99, 235, 0.24);
+        }
+        .chart-hover-image-wrap {
+            border-radius: 10px;
+            overflow: hidden;
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.96) 0%, rgba(7, 12, 22, 0.98) 100%);
+            border: 1px solid rgba(148, 163, 184, 0.12);
+        }
+        .chart-hover-image {
+            display: block;
+            width: 100%;
+            height: auto;
+            min-height: 260px;
+            object-fit: contain;
+        }
+        .chart-dialog-mask {
+            position: fixed;
+            inset: 0;
+            z-index: 4100;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(2, 6, 23, 0.72);
+            backdrop-filter: blur(6px);
+        }
+        .chart-dialog-panel {
+            width: min(960px, calc(100vw - 40px));
+            max-height: calc(100vh - 40px);
+            padding: 16px;
+            border-radius: 18px;
+            border: 1px solid rgba(96, 165, 250, 0.28);
+            background: linear-gradient(180deg, rgba(10, 16, 30, 0.98) 0%, rgba(6, 10, 20, 0.98) 100%);
+            box-shadow: 0 28px 70px rgba(0, 0, 0, 0.5);
+            overflow: auto;
+        }
+        .chart-dialog-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+        .chart-dialog-close {
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            background: rgba(30, 41, 59, 0.92);
+            color: var(--text-primary);
+            padding: 7px 14px;
+            border-radius: 999px;
+            font-size: 13px;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .chart-dialog-close:hover {
+            border-color: rgba(96, 165, 250, 0.4);
+            background: rgba(37, 99, 235, 0.22);
+        }
+        .chart-dialog-image-wrap {
+            border-radius: 14px;
+            overflow: hidden;
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.98) 0%, rgba(7, 12, 22, 0.98) 100%);
+            border: 1px solid rgba(148, 163, 184, 0.12);
+        }
+        .chart-dialog-image {
+            display: block;
+            width: 100%;
+            height: auto;
+            min-height: 520px;
+            object-fit: contain;
+        }
+
+        /* Advice Badges */
+        .suggestion { padding: 4px 8px; border-radius: 4px; font-weight: 600; font-size: 12px; display: inline-block; min-width: 60px; }
+
+        .el-dialog,
+        .el-popover {
+            color: var(--text-primary);
+        }
+
+        .el-dialog__body,
+        .el-popover {
+            line-height: 1.7;
+        }
+        .suggestion-观望 { background: rgba(122, 139, 163, 0.2); color: var(--text-secondary); }
+        .suggestion-buy { background: rgba(255, 77, 79, 0.2); color: var(--up-color); }
+        .suggestion-sell { background: rgba(82, 196, 26, 0.2); color: var(--down-color); }
+        .suggestion-hold { background: rgba(74, 158, 255, 0.2); color: var(--accent); }
+        .suggestion-warn { background: rgba(250, 140, 22, 0.2); color: var(--warning); }
+        .suggestion-danger { background: rgba(255, 77, 79, 0.2); color: var(--up-color); border: 1px solid var(--up-color); }
+
+        .hidden-input { display: none; }
+
+        /* Mobile Adaptations */
+        .mobile-list-container { flex: 1; overflow-y: auto; padding-right: 2px; -webkit-overflow-scrolling: touch; display: none; }
+        .pc-table-view { display: flex; flex-direction: column; height: 100%; }
+
+        @media (max-width: 768px) {
+            body { padding: 8px; }
+            .control-bar { padding: 12px; gap: 8px; }
+            .control-bar h2 { font-size: 16px; width: 100%; margin-bottom: 8px; }
+            .btn-group-wrapper { width: 100%; overflow-x: visible; padding-bottom: 4px; flex-wrap: wrap; justify-content: flex-start; }
+            .refresh-settings { width: 100%; justify-content: flex-start; }
+            .refresh-status-note { width: 100%; }
+            .index-overview-panel { padding: 12px; }
+            .index-overview-header { align-items: flex-start; }
+            .index-overview-header.compact { flex-wrap: wrap; }
+            .index-overview-actions { width: 100%; margin-left: 0; }
+            .index-overview-actions .el-button { flex: 1 1 auto; }
+            .index-overview-summary { width: 100%; white-space: normal; overflow: visible; }
+            .index-overview-grid { grid-template-columns: 1fr; gap: 10px; }
+            .index-card-price { font-size: 20px; }
+            .index-card-chart img { height: 120px; }
+            .chart-dialog-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .pc-table-view { display: none !important; }
+            .mobile-list-container { display: block !important; }
+            .chart-hover-popover { display: none !important; }
+            .chart-dialog-mask { padding: 12px; }
+            .chart-dialog-panel { width: calc(100vw - 24px); max-height: calc(100vh - 24px); padding: 12px; }
+            .chart-dialog-image { min-height: 280px; }
+            
+            .m-card { 
+                background: var(--bg-card); 
+                border: 1px solid var(--border-color); 
+                border-radius: 8px; padding: 12px; margin-bottom: 12px; 
+            }
+            .m-header { display: flex; justify-content: space-between; margin-bottom: 8px; }
+            .m-title { font-weight: bold; color: var(--text-primary); }
+            .m-price-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+            .m-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 13px; }
+            .m-item label { color: var(--text-secondary); display: block; margin-bottom: 2px; }
+            .m-item .el-input,
+            .m-item .el-date-editor.el-input,
+            .m-item .el-date-editor.el-input__wrapper {
+                width: 100%;
+            }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: var(--bg-primary); }
+        ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+        .el-table__body-wrapper { 
+            scrollbar-gutter: stable; 
+        }
+
+        .el-table .el-table__body {
+            width: 100% !important;
+        }
+
+        .el-table__header {
+            width: 100% !important;
+        }
+
+        .el-table th.el-table__cell, 
+        .el-table td.el-table__cell {
+            box-sizing: border-box;
+        }
+    </style>
+</head>
+<body>
+<div id="app">
+    <el-dialog v-model="showDisclaimer" title="⚠️ 免责声明" width="480" :close-on-click-modal="false" :show-close="false" class="disclaimer-dialog" center>
+        <div style="font-size: 14px; line-height: 1.8; color: var(--text-primary);">
+            <p style="margin-bottom: 12px;">1. 本工具（牛股计算器）仅为个人复盘与数据测算辅助工具，所有的计算结果及操作建议均基于特定数学模型自动生成。</p>
+            <p style="margin-bottom: 12px;">2. 本工具提供的任何信息均不构成任何实质性的投资建议或买卖指导。金融市场行情瞬息万变，请勿盲目依赖本工具所提示的指标。</p>
+            <p>3. 股市有风险，交易需谨慎。任何人据此进行真实的证券投资，所产生的任何盈亏、风险及法律责任均由您完全自行承担。</p>
+        </div>
+        <template #footer>
+            <el-button type="danger" @click="acceptDisclaimer">我已阅读并知晓，盈亏自负</el-button>
+        </template>
+    </el-dialog>
+
+    <el-dialog v-model="showHelpDialog" title="📘 四维交易体系说明" :width="isMobile ? '94%' : '860px'" class="help-dialog" align-center center>
+        <div class="help-content">
+            <div class="help-section">
+                <h4>核心思想</h4>
+                <p>“四维交易体系”，结合空间、时间、防守与逻辑自洽。</p>
+            </div>
+            <div class="help-section">
+                <h4>一、观察模式</h4>
+                <p>• <b class="help-green">常规买点 (0.382)</b>：强势龙头首阴 / 浅回踩。</p>
+                <p>• <b class="help-blue">强防生死线 (0.618)</b>：波段多空生死线。</p>
+                <p>• <b class="help-red">放弃观察 (0.786)</b>：套牢盘极重，大概率 A 杀。</p>
+            </div>
+            <div class="help-section">
+                <h4>二、持仓模式</h4>
+                <p>• <b class="help-red">破底 / 成本止损</b>：跌破低点 3% 或亏损 6% 离场。</p>
+                <p>• <b class="help-orange">时间证伪</b>：13 个交易日（除周末）不创新高离场。</p>
+                <p>• <b class="help-green">突破新高</b>：自动更新顶部并重置时间。</p>
+            </div>
+            <div class="help-section">
+                <h4>高亮提示</h4>
+                <p>• <b class="help-green">0.382 绿色高亮</b>：当买点观察值与现价相差不超过 ±3% 时触发。</p>
+                <p>• <b class="help-orange">0.618 橙色高亮</b>：当买点观察值与现价相差不超过 ±3% 时触发。</p>
+                <div class="help-note">高亮仅表示“买点观察值接近现价”，不会改变现有买卖建议判定逻辑。</div>
+            </div>
+            <div class="help-section">
+                <h4>自动刷新机制</h4>
+                <p>• 勾选“自动刷新”后，系统会按本说明窗口中设置的间隔秒数自动刷新行情。</p>
+                <p>• 自动刷新仅在盘中生效：工作日 09:10-12:05、12:55-16:05。</p>
+                <p>• 休市和周末会自动暂停，手动点击“刷新”按钮仍可随时刷新。</p>
+                <div class="help-note">当前设置：{{autoRefreshEnabled ? '已开启' : '已关闭'}}，间隔 {{autoRefreshIntervalSec}} 秒。</div>
+                <div class="refresh-settings help-refresh-controls">
+                    <el-checkbox v-model="autoRefreshEnabled" class="refresh-toggle" @change="handleAutoRefreshToggle">自动刷新</el-checkbox>
+                    <div class="refresh-interval">
+                        <span>间隔</span>
+                        <el-input v-model.number="autoRefreshIntervalSec" size="small" type="number" min="3" max="300" :disabled="!autoRefreshEnabled" @change="applyAutoRefreshSettings"></el-input>
+                        <span>秒</span><span class="refresh-range-note">（有效值：3-300，默认：10）</span>
+                    </div>
+                    <span class="refresh-status-note">修改后立即生效；盘中运行，休市和周末自动暂停。间隔秒数有效值为 3-300，默认 10 秒。</span>
+                </div>
+            </div>
+        </div>
+        <template #footer>
+            <el-button @click="showHelpDialog = false">关闭</el-button>
+        </template>
+    </el-dialog>
+
+    <el-config-provider :locale="locale">
+        <!-- Control Bar -->
+        <div class="control-bar">
+            <h2>
+                牛股策略计算器
+                <span class="header-sub">{{lastRefreshTime ? '上次刷新 ' + lastRefreshTime : '上次刷新 --'}}</span>
+                <span :class="['auto-refresh-badge', getAutoRefreshBadgeClass()]">{{getAutoRefreshBadgeText()}}</span>
+            </h2>
+            
+            <div class="btn-group-wrapper" style="flex: 1; justify-content: flex-end; flex-wrap: wrap;">
+                 <el-input v-model="inputCodes" size="small" placeholder="代码: 300308, sh600519" style="width: 320px; margin-right: 8px; --el-input-border-color: var(--border-color);" @keyup.enter="addNewCodes"></el-input>
+                 <el-button type="primary" size="small" @click="addNewCodes" :loading="loading" class="btn-add"><svg class="icon"><use href="#icon-add"></use></svg> 添加</el-button>
+                 <el-button size="small" @click="refreshAllPrices()" :loading="loading"><svg class="icon"><use href="#icon-refresh"></use></svg> 刷新</el-button>
+                 <el-button size="small" @click="triggerImport"><svg class="icon"><use href="#icon-import"></use></svg> 导入</el-button>
+                 <el-button size="small" @click="exportData"><svg class="icon"><use href="#icon-export"></use></svg> 导出</el-button>
+                 <el-button size="small" type="danger" @click="clearAll"><svg class="icon"><use href="#icon-delete"></use></svg> 清空</el-button>
+                 <el-button size="small" @click="openHelpDialog"><svg class="icon"><use href="#icon-info"></use></svg> 说明</el-button>
+                 <el-button size="small" type="success" @click="launchMonitor" style="font-weight:600;"><svg class="icon"><use href="#icon-monitor"></use></svg> 启动监控</el-button>
+            </div>
+            <input type="file" ref="fileInput" class="hidden-input" accept=".csv" @change="importData">
+        </div>
+
+        <div class="index-overview-panel">
+            <div :class="['index-overview-header', { compact: !showIndexCharts || isMobile }]">
+                <div v-if="showIndexCharts && !isMobile" class="index-overview-title-wrap">
+                    <div class="index-overview-title">&#25351;&#25968;&#35266;&#23519;</div>
+                    <span class="index-overview-sub">&#19978;&#35777;&#12289;&#28145;&#35777;&#12289;&#21019;&#25351;&#12289;&#31185;&#21019;50 &#23454;&#26102;&#27010;&#35272;</span>
+                    <span class="index-overview-turnover"><span class="index-overview-turnover-label">&#20004;&#24066;&#25104;&#20132;&#39069;</span><span class="index-overview-turnover-value">{{getTwoMarketAmountText()}}</span></span>
+                </div>
+                <div v-else class="index-overview-summary">
+                    <span class="index-overview-summary-name">&#20004;&#24066;&#25104;&#20132;&#39069; </span><span class="index-overview-summary-value index-overview-turnover-value">{{getTwoMarketAmountText()}}</span><span>&#65307;</span>
+                    <template v-for="(item, index) in marketIndexData" :key="item.fullCode">
+                        <span class="index-overview-summary-name">{{item.shortName || item.name || item.fullCode}}</span>
+                        <span>&#29616;&#20215; </span><span :class="['index-overview-summary-value', getPriceClass(item.changePct)]">{{formatMetricNumber(item.now)}}</span>
+                        <span>&#65292;&#28072;&#36300; </span><span :class="['index-overview-summary-value', getPriceClass(item.changePct)]">{{formatSignedMetricNumber(item.change)}}</span>
+                        <span>&#65292;&#28072;&#24133; </span><span :class="['index-overview-summary-value', getPriceClass(item.changePct)]">{{formatPct(item.changePct)}}</span><span v-if="index < marketIndexData.length - 1">&#65307;</span>
+                    </template>
+                </div>
+                <div class="index-overview-actions">
+                    <el-button v-if="!isMobile && showIndexCharts" size="small" @click="toggleIndexChartType">{{getIndexChartTypeToggleText()}}</el-button>
+                    <el-button v-if="!isMobile" size="small" @click="toggleIndexOverviewMode">{{getIndexOverviewToggleText()}}</el-button>
+                </div>
+            </div>
+            <div v-if="showIndexCharts && !isMobile" class="index-overview-grid">
+                <div v-for="item in marketIndexData" :key="item.fullCode" class="index-card">
+                    <div class="index-card-head">
+                        <div class="index-card-name-wrap">
+                            <span class="index-card-name">{{item.name}}</span>
+                            <span class="index-card-code">{{item.fullCode}}</span>
+                        </div>
+                        <div class="index-card-values">
+                            <span :class="['index-card-price', getPriceClass(item.changePct)]">{{formatMetricNumber(item.now)}}</span>
+                            <span :class="['index-card-change', getPriceClass(item.changePct)]">{{formatPct(item.changePct)}}</span>
+                        </div>
+                    </div>
+                    <div class="index-card-chart" :title="indexChartTriggerTitle" @click="openIndexChartDialog(item)">
+                        <img :src="getIndexChartUrl(item)" :alt="`${item.name} chart`">
+                    </div>
+                    <div class="index-card-metrics">
+                        <div class="index-metric">
+                            <span class="index-metric-label">&#28072;&#36300;</span>
+                            <span :class="['index-metric-value', getPriceClass(item.changePct)]">{{formatSignedMetricNumber(item.change)}}</span>
+                        </div>
+                        <div class="index-metric">
+                            <span class="index-metric-label">&#20170;&#24320;</span>
+                            <span :class="['index-metric-value', getRelativeValueClass(item.open, item.prevClose)]">{{formatMetricNumber(item.open)}}</span>
+                        </div>
+                        <div class="index-metric">
+                            <span class="index-metric-label">&#26368;&#39640;</span>
+                            <span :class="['index-metric-value', getRelativeValueClass(item.high, item.prevClose)]">{{formatMetricNumber(item.high)}}</span>
+                        </div>
+                        <div class="index-metric">
+                            <span class="index-metric-label">&#26368;&#20302;</span>
+                            <span :class="['index-metric-value', getRelativeValueClass(item.low, item.prevClose)]">{{formatMetricNumber(item.low)}}</span>
+                        </div>
+                        <div class="index-metric">
+                            <span class="index-metric-label">&#25391;&#24133;</span>
+                            <span class="index-metric-value">{{formatMetricPercent(item.amplitude)}}</span>
+                        </div>
+                        <div class="index-metric">
+                            <span class="index-metric-label">&#25104;&#20132;&#39069;</span>
+                            <span class="index-metric-value">{{formatAmountSummary(item.amount)}}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="app-container">
+            <div class="pc-table-view">
+                <el-table ref="tableRef" :data="tableData" height="100%" :row-class-name="tableRowClassName" row-key="fullCode" :border="false">
+                    <el-table-column label="序号" width="50" align="center" class-name="drag-column">
+                        <template #default="scope">
+                            <div class="drag-handle" title="拖拽排序">{{scope.$index + 1}}</div>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="名称" width="200" align="left" class-name="drag-column">
+                        <template #default="scope">
+                            <div style="display:flex;align-items:center;gap:4px;flex-wrap:nowrap;overflow:hidden;">
+                                <span class="drag-handle stock-name" style="white-space:nowrap;">{{scope.row.name}}</span>
+                                <span v-if="getPositionPct(scope.row) > 0" style="color:#a78bfa;font-size:10px;white-space:nowrap;">{{formatPositionPct(scope.row)}}%</span>
+                                <span v-if="getProfitInfo(scope.row).amount !== 0" :class="getProfitInfo(scope.row).amount >= 0 ? 'up-text' : 'down-text'" style="font-size:11px;font-weight:600;white-space:nowrap;">
+                                    {{getProfitInfo(scope.row).amount >= 0 ? '+' : ''}}{{getProfitInfo(scope.row).amount.toFixed(0)}}
+                                </span>
+                                <span v-if="getProfitInfo(scope.row).pct !== 0" :class="getProfitInfo(scope.row).pct >= 0 ? 'up-text' : 'down-text'" style="font-size:10px;white-space:nowrap;">
+                                    {{getProfitInfo(scope.row).pct >= 0 ? '+' : ''}}{{getProfitInfo(scope.row).pct.toFixed(2)}}%
+                                </span>
+                            </div>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="现价" width="120" align="center">
+                        <template #default="scope">
+                            <span
+                                :class="['chart-price-trigger', getPriceClass(scope.row.changePct)]"
+                                style="font-weight: bold; white-space: nowrap;"
+                                :title="priceChartTriggerTitle"
+                                @mouseenter="handlePriceHoverEnter(scope.row, $event)"
+                                @mousemove="handlePriceHoverMove(scope.row, $event)"
+                                @mouseleave="handlePriceHoverLeave"
+                                @click="openChartDialog(scope.row)"
+                            >{{formatNum(scope.row.now, scope.row)}}({{formatPct(scope.row.changePct)}})</span>
+                        </template>
+                    </el-table-column>
+                    
+                    <el-table-column label="日内压力" width="90" align="center">
+                        <template #default="scope"><span class="up-text">{{formatNum(scope.row.topLine, scope.row)}}</span></template>
+                    </el-table-column>
+                    <el-table-column label="日内支撑" width="90" align="center">
+                        <template #default="scope"><span class="down-text">{{formatNum(scope.row.bottomLine, scope.row)}}</span></template>
+                    </el-table-column>
+
+                    <el-table-column label="波段顶" width="90" align="center">
+                        <template #default="scope">
+                            <el-input v-model="scope.row.high" size="small" @change="calculateRow(scope.row)"></el-input>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="波段底" width="90" align="center">
+                        <template #default="scope">
+                            <el-input v-model="scope.row.low" size="small" @change="calculateRow(scope.row)"></el-input>
+                        </template>
+                    </el-table-column>
+                    
+                    <el-table-column label="买点观察(0.382)" width="90" align="center">
+                        <template #default="scope"><span :class="['fib-val', { 'fib-highlight-382': isNearBuyPoint(scope.row, 'f382') }]">{{formatNum(scope.row.f382, scope.row)}}</span></template>
+                    </el-table-column>
+                    <el-table-column label="买点观察(0.618)" width="90" align="center">
+                        <template #default="scope"><span :class="['fib-val', { 'fib-highlight-618': isNearBuyPoint(scope.row, 'f618') }]">{{formatNum(scope.row.f618, scope.row)}}</span></template>
+                    </el-table-column>
+                    
+                    <el-table-column label="成本价" width="90" align="center">
+                        <template #default="scope">
+                            <el-input v-model="scope.row.cost" size="small" @change="calculateRow(scope.row)"></el-input>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="持仓数量(手)" width="100" align="center">
+                        <template #default="scope">
+                            <el-input v-model.number="scope.row.position" size="small" style="width:80px;" @change="saveToLocal()"></el-input>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="建仓日期" width="110" align="center">
+                        <template #default="scope">
+                            <el-date-picker v-model="scope.row.buyDate" type="date" size="small" value-format="YYYY-MM-DD" style="width: 100%" @change="handleBuyDateChange(scope.row, $event)" :prefix-icon="null"></el-date-picker>
+                        </template>
+                    </el-table-column>
+                    
+                    <el-table-column label="操作建议" width="100" align="center">
+                        <template #default="scope">
+                            <span :class="['suggestion', scope.row.adviceClass]">{{scope.row.signal}}</span>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="推送" width="75" align="center">
+                        <template #header>
+                            <span style="margin-right:2px;">推送</span><el-checkbox v-model="monitorAll" @change="toggleMonitorAll" size="small"></el-checkbox>
+                        </template>
+                        <template #default="scope">
+                            <el-checkbox v-model="scope.row.monitor" size="small" @change="saveToLocal()"></el-checkbox>
+                        </template>
+                    </el-table-column>
+                    <el-table-column label="操作" width="80" align="center">
+                        <template #default="scope">
+                            <el-button type="danger" link size="small" @click="removeItem(scope.$index)">删除</el-button>
+                        </template>
+                    </el-table-column>
+                </el-table>
+            </div>
+
+            <!-- Mobile View (Simplified) -->
+            <div id="mobileList" class="mobile-list-container">
+                 <div v-for="(item, index) in tableData" :key="item.fullCode" class="m-card">
+                    <div class="m-header">
+                        <div class="m-title">
+                            <el-checkbox v-model="item.monitor" size="small" @change="saveToLocal()" style="margin-right:6px;">推送</el-checkbox>
+                            <span class="stock-name">{{item.name}}</span>
+                            <span v-if="getPositionPct(item) > 0" style="color:#a78bfa;font-size:11px;margin-left:4px;">{{formatPositionPct(item)}}%</span>
+                            <span v-if="getProfitInfo(item).amount !== 0" :class="getProfitInfo(item).amount >= 0 ? 'up-text' : 'down-text'" style="font-size:12px;font-weight:600;margin-left:6px;">
+                                {{getProfitInfo(item).amount >= 0 ? '+' : ''}}{{getProfitInfo(item).amount.toFixed(0)}}元
+                            </span>
+                            <span v-if="getProfitInfo(item).pct !== 0" :class="getProfitInfo(item).pct >= 0 ? 'up-text' : 'down-text'" style="font-size:11px;margin-left:4px;">
+                                {{getProfitInfo(item).pct >= 0 ? '+' : ''}}{{getProfitInfo(item).pct.toFixed(2)}}%
+                            </span>
+                        </div>
+                        <el-button type="danger" link size="small" @click="removeItem(index)">删除</el-button>
+                    </div>
+                    <div class="m-price-row">
+                        <span :class="getPriceClass(item.changePct)" style="font-size: 20px; font-weight: bold;">{{item.now}}</span>
+                        <span :class="getPriceClass(item.changePct)">{{formatPct(item.changePct)}}</span>
+                        <span :class="['suggestion', item.adviceClass]">{{item.signal || '--'}}</span>
+                    </div>
+                    <div class="m-grid">
+                        <div class="m-item">
+                            <label>压力: <span class="up-text">{{item.topLine}}</span></label>
+                            <label>支撑: <span class="down-text">{{item.bottomLine}}</span></label>
+                        </div>
+                        <div class="m-item">
+                            <label>0.382: <span :class="['fib-val', { 'fib-highlight-382': isNearBuyPoint(item, 'f382') }]">{{formatNum(item.f382, item)}}</span></label>
+                            <label>0.618: <span :class="['fib-val', { 'fib-highlight-618': isNearBuyPoint(item, 'f618') }]">{{formatNum(item.f618, item)}}</span></label>
+                        </div>
+                        <div class="m-item">
+                            <label>波段顶</label>
+                            <el-input v-model="item.high" size="small" type="number" @change="calculateRow(item)"></el-input>
+                        </div>
+                        <div class="m-item">
+                            <label>波段底</label>
+                            <el-input v-model="item.low" size="small" type="number" @change="calculateRow(item)"></el-input>
+                        </div>
+                        <div class="m-item">
+                            <label>成本价</label>
+                            <el-input v-model="item.cost" size="small" @change="calculateRow(item)"></el-input>
+                        </div>
+                        <div class="m-item">
+                            <label>持仓数量(手)</label>
+                            <el-input v-model.number="item.position" size="small" @change="saveToLocal()"></el-input>
+                        </div>
+                        <div class="m-item">
+                            <label>建仓日期</label>
+                            <el-date-picker v-model="item.buyDate" type="date" size="small" value-format="YYYY-MM-DD" style="width: 100%" @change="handleBuyDateChange(item, $event)" :prefix-icon="null"></el-date-picker>
+                        </div>
+                    </div>
+                    </div>
+                 </div>
+            </div>
+
+            <div
+                v-show="chartHover.visible"
+                ref="chartPopoverRef"
+                class="chart-hover-popover"
+                :style="{ left: chartHover.left + 'px', top: chartHover.top + 'px' }"
+                @mouseenter="handleChartPopoverEnter"
+                @mouseleave="handleChartPopoverLeave"
+            >
+                <div class="chart-hover-header">
+                    <div class="chart-hover-title">
+                        <span class="chart-hover-name">{{chartHover.name || '--'}}</span>
+                        <span class="chart-hover-code">{{chartHover.symbol || '--'}}</span>
+                    </div>
+                    <div class="chart-hover-tabs">
+                        <button type="button" class="chart-tab-btn" :class="{ active: chartHover.type === 'min' }" @click="switchHoverChart('min')">&#20998;&#26102;&#22270;</button>
+                        <button type="button" class="chart-tab-btn" :class="{ active: chartHover.type === 'daily' }" @click="switchHoverChart('daily')">&#26085;&#32447;&#22270;</button>
+                    </div>
+                </div>
+                <div class="chart-hover-image-wrap">
+                    <img class="chart-hover-image" :src="getHoverChartUrl()" alt="chart preview">
+                </div>
+            </div>
+
+            <div v-if="chartDialog.visible" class="chart-dialog-mask" @click.self="closeChartDialog">
+                <div class="chart-dialog-panel">
+                    <div class="chart-dialog-header">
+                        <div class="chart-hover-title">
+                            <span class="chart-hover-name">{{chartDialog.name || '--'}}</span>
+                            <span class="chart-hover-code">{{chartDialog.symbol || '--'}}</span>
+                        </div>
+                        <div class="chart-hover-tabs">
+                            <button type="button" class="chart-tab-btn" :class="{ active: chartDialog.type === 'min' }" @click="switchDialogChart('min')">&#20998;&#26102;&#22270;</button>
+                            <button type="button" class="chart-tab-btn" :class="{ active: chartDialog.type === 'daily' }" @click="switchDialogChart('daily')">&#26085;&#32447;&#22270;</button>
+                            <button type="button" class="chart-dialog-close" @click="closeChartDialog">&#20851;&#38381;</button>
+                        </div>
+                    </div>
+                    <div class="chart-dialog-image-wrap">
+                        <img class="chart-dialog-image" :src="getDialogChartUrl()" alt="chart dialog preview">
+                    </div>
+                    <div v-if="chartDialog.metrics && chartDialog.metrics.length" class="chart-dialog-metrics">
+                        <div v-for="metric in chartDialog.metrics" :key="`${chartDialog.symbol}-${metric.label}`" class="chart-dialog-metric">
+                            <span class="chart-dialog-metric-label">{{metric.label}}</span>
+                            <span :class="['chart-dialog-metric-value', metric.className || '']">{{metric.value}}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </el-config-provider>
+</div>
+<script>
+    const { createApp, ref, onMounted, reactive, nextTick, onUnmounted } = Vue;
+    const { ElMessage, ElMessageBox } = ElementPlus;
+    const App = {
+        setup() {
+            const locale = ElementPlusLocaleZhCn;
+            const STORAGE_KEY = 'phi_batch_table_v5';
+            const DISCLAIMER_KEY = 'phi_disclaimer_accepted';
+            const AUTO_REFRESH_ENABLED_KEY = 'phi_auto_refresh_enabled';
+            const AUTO_REFRESH_INTERVAL_KEY = 'phi_auto_refresh_interval_sec';
+            const INDEX_OVERVIEW_SHOW_CHARTS_KEY = 'phi_index_overview_show_charts';
+            const DEFAULT_AUTO_REFRESH_INTERVAL_SEC = 10;
+            const MARKET_INDEX_DEFS = [
+                { fullCode: 'sh000001', name: '\u4e0a\u8bc1\u6307\u6570', shortName: '\u6caa\u6307' },
+                { fullCode: 'sz399001', name: '\u6df1\u8bc1\u6210\u6307', shortName: '\u6df1\u6307' },
+                { fullCode: 'sz399006', name: '\u521b\u4e1a\u677f\u6307', shortName: '\u521b\u6307' },
+                { fullCode: 'sh000688', name: '\u79d1\u521b50', shortName: '\u79d1\u521b50' }
+            ];
+            const normalizeAutoRefreshInterval = (value) => {
+                const parsed = parseInt(value, 10);
+                if (!Number.isFinite(parsed)) return DEFAULT_AUTO_REFRESH_INTERVAL_SEC;
+                return Math.min(300, Math.max(3, parsed));
+            };
+            const inputCodes = ref("");
+            const tableData = ref([]);
+            const monitorAll = ref(true);
+            const toggleMonitorAll = (val) => {
+                tableData.value.forEach(row => { row.monitor = val; });
+                saveToLocal();
+            };
+            const loading = ref(false);
+            const fileInput = ref(null);
+            const tableRef = ref(null);
+            const isMobile = ref(window.innerWidth <= 768);
+            const lastRefreshTime = ref('');
+            const showDisclaimer = ref(false);
+            const showHelpDialog = ref(false);
+            const autoRefreshEnabled = ref(localStorage.getItem(AUTO_REFRESH_ENABLED_KEY) !== 'false');
+            const autoRefreshIntervalSec = ref(normalizeAutoRefreshInterval(localStorage.getItem(AUTO_REFRESH_INTERVAL_KEY) || DEFAULT_AUTO_REFRESH_INTERVAL_SEC));
+            const isFetchingData = ref(false);
+            const showIndexCharts = ref(!isMobile.value && localStorage.getItem(INDEX_OVERVIEW_SHOW_CHARTS_KEY) !== 'false');
+            const indexChartType = ref('min');
+            const marketIndexData = ref(MARKET_INDEX_DEFS.map((item) => reactive({ ...item, now: '', change: '', changePct: null, prevClose: '', open: '', high: '', low: '', avg: '', totalHands: '', amount: '', amplitude: '', volumeRatio: '', chartCacheKey: Date.now() })));
+            const priceChartTriggerTitle = '\u60ac\u505c\u9884\u89c8\u56fe\u8868\uff0c\u70b9\u51fb\u653e\u5927\u67e5\u770b';
+            const indexChartTriggerTitle = '\u70b9\u51fb\u653e\u5927\u67e5\u770b\u6307\u6570\u56fe\u8868';
+            const chartPopoverRef = ref(null);
+            let autoRefreshTimer = null;
+            let isFetchingIndexOverview = false;
+            let userSorted = false;
+            const HOVER_CHART_DELAY_MS = 450;
+            const HOVER_CHART_HIDE_DELAY_MS = 180;
+            const chartHover = reactive({
+                visible: false,
+                type: 'min',
+                symbol: '',
+                name: '',
+                left: 12,
+                top: 12,
+                cacheKey: Date.now()
+            });
+            const chartDialog = reactive({
+                visible: false,
+                source: 'stock',
+                type: 'min',
+                symbol: '',
+                name: '',
+                cacheKey: Date.now(),
+                metrics: []
+            });
+            let hoverShowTimer = null;
+            let hoverHideTimer = null;
+            let isHoveringPriceTrigger = false;
+            let isHoveringChartPopover = false;
+            let pendingHoverRow = null;
+            let hoveredRowElement = null;
+            let lastHoverPointer = null;
+
+            const acceptDisclaimer = () => {
+                localStorage.setItem(DISCLAIMER_KEY, 'true');
+                showDisclaimer.value = false;
+            };
+
+            const openHelpDialog = () => {
+                showHelpDialog.value = true;
+            };
+
+            // ── 启动监控 ──
+            const launchMonitor = () => {
+                const psUrl = new URL('../monitor/start_monitor.ps1', location.href);
+                let psPath = psUrl.pathname;
+                if (psPath.startsWith('/') && /^[A-Za-z]:/.test(psPath.slice(1))) psPath = psPath.slice(1);
+                const cmd = `powershell -ExecutionPolicy Bypass -File "${psPath}"`;
+                navigator.clipboard.writeText(cmd).then(() => {
+                    ElMessage({
+                        message: '启动命令已复制 → 右键管理员运行 cmd，粘贴回车（首次需管理员权限创建唤醒任务）',
+                        type: 'success',
+                        duration: 6000,
+                        showClose: true,
+                    });
+                }).catch(() => {
+                    ElMessageBox.alert(
+                        `<div style="font-size:12px;margin-bottom:8px;color:#94a3b8;">手动复制以下命令，右键管理员运行 cmd 粘贴：</div><pre style="white-space:pre-wrap;word-break:break-all;font-size:12px;color:#a8d8ff;background:#0d1b2a;padding:10px;border-radius:6px;user-select:all;">${cmd}</pre>`,
+                        '启动监控脚本',
+                        { dangerouslyUseHTMLString: true, confirmButtonText: '关闭' }
+                    );
+                });
+            };
+
+            const handleWindowResize = () => {
+                const nextIsMobile = window.innerWidth <= 768;
+                isMobile.value = nextIsMobile;
+                if (nextIsMobile && showIndexCharts.value) {
+                    showIndexCharts.value = false;
+                    localStorage.setItem(INDEX_OVERVIEW_SHOW_CHARTS_KEY, 'false');
+                }
+                if (chartHover.visible && lastHoverPointer) {
+                    nextTick(() => updateChartPopoverPosition(lastHoverPointer));
+                }
+            };
+            window.addEventListener('resize', handleWindowResize);
+
+            const formatPct = (pct) => {
+                if (pct === undefined || pct === null) return '--';
+                const p = parseFloat(pct);
+                if (p > 0) return `+${p.toFixed(2)}%`;
+                if (p < 0) return `${p.toFixed(2)}%`;
+                return `0.00%`;
+            };
+
+            const formatMetricNumber = (val, decimals = 2) => {
+                if (val === undefined || val === null || val === '') return '--';
+                const n = parseFloat(val);
+                if (!Number.isFinite(n)) return '--';
+                return n.toFixed(decimals);
+            };
+
+            const formatSignedMetricNumber = (val, decimals = 2) => {
+                if (val === undefined || val === null || val === '') return '--';
+                const n = parseFloat(val);
+                if (!Number.isFinite(n)) return '--';
+                return `${n > 0 ? '+' : ''}${n.toFixed(decimals)}`;
+            };
+
+            const formatMetricPercent = (val, decimals = 2) => {
+                if (val === undefined || val === null || val === '') return '--';
+                const n = parseFloat(val);
+                if (!Number.isFinite(n)) return '--';
+                return `${n.toFixed(decimals)}%`;
+            };
+
+            const formatHandsSummary = (val) => {
+                if (val === undefined || val === null || val === '') return '--';
+                const n = parseFloat(val);
+                if (!Number.isFinite(n)) return '--';
+                if (n >= 100000000) return `${(n / 100000000).toFixed(2)}亿手`;
+                if (n >= 10000) return `${(n / 10000).toFixed(2)}万手`;
+                return `${Math.round(n)}手`;
+            };
+
+            const formatAmountSummary = (val) => {
+                if (val === undefined || val === null || val === '') return '--';
+                const n = parseFloat(val);
+                if (!Number.isFinite(n)) return '--';
+                if (n >= 100000000) return `${(n / 100000000).toFixed(2)}亿元`;
+                if (n >= 10000) return `${(n / 10000).toFixed(2)}万元`;
+                return `${Math.round(n)}元`;
+            };
+
+            const formatWanYiAmount = (val) => {
+                if (val === undefined || val === null || val === '') return '--';
+                const n = parseFloat(val);
+                if (!Number.isFinite(n)) return '--';
+                return `${(n / 1000000000000).toFixed(2)}万亿元`;
+            };
+
+            const persistIndexOverviewMode = () => {
+                localStorage.setItem(INDEX_OVERVIEW_SHOW_CHARTS_KEY, showIndexCharts.value ? 'true' : 'false');
+            };
+
+            const toggleIndexOverviewMode = () => {
+                if (isMobile.value) {
+                    showIndexCharts.value = false;
+                    persistIndexOverviewMode();
+                    return;
+                }
+                showIndexCharts.value = !showIndexCharts.value;
+                persistIndexOverviewMode();
+            };
+
+            const getIndexOverviewToggleText = () => {
+                return showIndexCharts.value ? '\u6536\u8d77\u56fe\u8868' : '\u5c55\u5f00\u56fe\u8868';
+            };
+
+            const refreshIndexChartImages = () => {
+                const cacheKey = Date.now();
+                marketIndexData.value.forEach(item => {
+                    item.chartCacheKey = cacheKey;
+                });
+            };
+
+            const toggleIndexChartType = () => {
+                indexChartType.value = indexChartType.value === 'daily' ? 'min' : 'daily';
+                refreshIndexChartImages();
+            };
+
+            const getIndexChartTypeToggleText = () => {
+                return indexChartType.value === 'daily' ? '\u5207\u6362\u5206\u65f6\u56fe' : '\u5207\u6362\u65e5\u7ebf\u56fe';
+            };
+
+            const getTwoMarketAmount = () => {
+                let totalAmount = 0;
+                let hasValue = false;
+                marketIndexData.value.forEach((item) => {
+                    if (item.fullCode !== 'sh000001' && item.fullCode !== 'sz399001') return;
+                    const amount = parseFloat(item.amount);
+                    if (!Number.isFinite(amount)) return;
+                    totalAmount += amount;
+                    hasValue = true;
+                });
+                return hasValue ? totalAmount : null;
+            };
+
+            const getTwoMarketAmountText = () => {
+                const totalAmount = getTwoMarketAmount();
+                return totalAmount === null ? '--' : formatWanYiAmount(totalAmount);
+            };
+
+            const getIndexOverviewSummaryText = () => {
+                const parts = marketIndexData.value.map((item) => {
+                    const shortName = item.shortName || item.name || item.fullCode;
+                    return `${shortName}\u73b0\u4ef7 ${formatMetricNumber(item.now)}\uff0c\u6da8\u8dcc ${formatSignedMetricNumber(item.change)}\uff0c\u6da8\u5e45 ${formatPct(item.changePct)}`;
+                });
+                return `\u4e24\u5e02\u6210\u4ea4\u989d ${getTwoMarketAmountText()}\uff1b${parts.join('\uff1b')}`;
+            };
+
+            const getIndexChartUrl = (item) => {
+                const symbol = item?.fullCode || 'sh000001';
+                const cacheKey = item?.chartCacheKey || Date.now();
+                return buildChartUrl(indexChartType.value, symbol, cacheKey);
+            };
+
+            const isETF = (code) => {
+                if (!code) return false;
+                const c = code.toLowerCase();
+                const num = c.replace(/^(sh|sz|hk|bj)/, '');
+                return /^((5[168]|1[568]|50|58)\d{3,4})$/.test(num);
+            };
+
+            const formatNum = (val, row) => {
+                if (val === undefined || val === null || val === '') return '--';
+                const n = parseFloat(val);
+                if (isNaN(n)) return '--';
+                const decimals = isETF(row?.fullCode) ? 3 : 2;
+                return n.toFixed(decimals);
+            };
+
+            const formatSignedNum = (val, row) => {
+                if (val === undefined || val === null || val === '') return '--';
+                const n = parseFloat(val);
+                if (isNaN(n)) return '--';
+                const decimals = isETF(row?.fullCode) ? 3 : 2;
+                return `${n > 0 ? '+' : ''}${n.toFixed(decimals)}`;
+            };
+
+            const getPriceClass = (pct) => {
+                const p = parseFloat(pct);
+                if (p > 0) return 'up-text';
+                if (p < 0) return 'down-text';
+                return '';
+            };
+
+            const getRelativeValueClass = (value, baseValue) => {
+                const current = parseFloat(value);
+                const base = parseFloat(baseValue);
+                if (!Number.isFinite(current) || !Number.isFinite(base)) return '';
+                if (current > base) return 'up-text';
+                if (current < base) return 'down-text';
+                return '';
+            };
+
+            // 计算机仓位数比 (%)
+            const getPositionPct = (row) => {
+                const pos = parseFloat(row.position);
+                if (!pos || pos <= 0) return 0;
+                const now = parseFloat(row.now) || 0;
+                if (now <= 0) return 0;
+                const totalMV = tableData.value.reduce((sum, r) => {
+                    const p = parseFloat(r.position) || 0;
+                    const n = parseFloat(r.now) || 0;
+                    return p > 0 && n > 0 ? sum + p * 100 * n : sum;
+                }, 0);
+                if (totalMV <= 0) return 0;
+                return ((pos * 100 * now) / totalMV * 100);
+            };
+
+            // 格式化仓位占比显示
+            const formatPositionPct = (row) => {
+                const v = getPositionPct(row);
+                return v > 0 ? v.toFixed(1) : '';
+            };
+
+            // 计算盈亏金额和盈亏率
+            const getProfitInfo = (row) => {
+                const now = parseFloat(row.now) || 0;
+                const cost = parseFloat(row.cost) || 0;
+                const pos = parseFloat(row.position) || 0;
+                if (cost <= 0 || pos <= 0 || now <= 0) return { amount: 0, pct: 0 };
+                const lotSize = 100; // A股1手=100股
+                const amount = (now - cost) * pos * lotSize;
+                const pct = (now - cost) / cost * 100;
+                return { amount, pct };
+            };
+
+            const clearHoverShowTimer = () => {
+                if (!hoverShowTimer) return;
+                window.clearTimeout(hoverShowTimer);
+                hoverShowTimer = null;
+            };
+
+            const clearHoverHideTimer = () => {
+                if (!hoverHideTimer) return;
+                window.clearTimeout(hoverHideTimer);
+                hoverHideTimer = null;
+            };
+
+            const hideChartPopover = () => {
+                chartHover.visible = false;
+                hoveredRowElement = null;
+            };
+
+            const closeChartDialog = () => {
+                chartDialog.visible = false;
+            };
+
+            const clampPosition = (value, min, max) => {
+                if (max < min) return min;
+                return Math.min(Math.max(value, min), max);
+            };
+
+            const refreshHoverChartImage = () => {
+                chartHover.cacheKey = Date.now();
+            };
+
+            const refreshDialogChartImage = () => {
+                chartDialog.cacheKey = Date.now();
+            };
+
+            const buildChartUrl = (chartType, symbol, cacheKey) => {
+                const resolvedType = chartType === 'daily' ? 'daily' : 'min';
+                const resolvedSymbol = symbol || 'sh000001';
+                return `http://image.sinajs.cn/newchart/${resolvedType}/n/${resolvedSymbol}.gif?t=${cacheKey}`;
+            };
+
+            const getHoverChartUrl = () => {
+                return buildChartUrl(chartHover.type, chartHover.symbol, chartHover.cacheKey);
+            };
+
+            const getDialogChartUrl = () => {
+                return buildChartUrl(chartDialog.type, chartDialog.symbol, chartDialog.cacheKey);
+            };
+
+            const buildDialogMetric = (label, value, className = '') => {
+                return { label, value, className };
+            };
+
+            const getStockDialogMetrics = (row) => {
+                return [
+                    buildDialogMetric('\u73b0\u4ef7', formatNum(row.now, row), getPriceClass(row.changePct)),
+                    buildDialogMetric('\u6628\u6536', formatNum(row.prevClose, row)),
+                    buildDialogMetric('\u4eca\u5f00', formatNum(row.open, row), getRelativeValueClass(row.open, row.prevClose)),
+                    buildDialogMetric('\u6da8\u8dcc', formatSignedNum(row.change, row), getPriceClass(row.changePct)),
+                    buildDialogMetric('\u6da8\u5e45', formatPct(row.changePct), getPriceClass(row.changePct)),
+                    buildDialogMetric('\u5747\u4ef7', formatNum(row.avg, row), getRelativeValueClass(row.avg, row.prevClose)),
+                    buildDialogMetric('\u6700\u9ad8', formatNum(row.dayHigh, row), getRelativeValueClass(row.dayHigh, row.prevClose)),
+                    buildDialogMetric('\u6700\u4f4e', formatNum(row.dayLow, row), getRelativeValueClass(row.dayLow, row.prevClose)),
+                    buildDialogMetric('\u632f\u5e45', formatMetricPercent(row.amplitude)),
+                    buildDialogMetric('\u6210\u4ea4\u91d1\u989d', formatAmountSummary(row.amount)),
+                    buildDialogMetric('\u603b\u624b', formatHandsSummary(row.totalHands)),
+                    buildDialogMetric('\u91cf\u6bd4', formatMetricNumber(row.volumeRatio))
+                ];
+            };
+
+            const getIndexDialogMetrics = (item) => {
+                return [
+                    buildDialogMetric('\u73b0\u4ef7', formatMetricNumber(item.now), getPriceClass(item.changePct)),
+                    buildDialogMetric('\u6628\u6536', formatMetricNumber(item.prevClose)),
+                    buildDialogMetric('\u4eca\u5f00', formatMetricNumber(item.open), getRelativeValueClass(item.open, item.prevClose)),
+                    buildDialogMetric('\u6da8\u8dcc', formatSignedMetricNumber(item.change), getPriceClass(item.changePct)),
+                    buildDialogMetric('\u6da8\u5e45', formatPct(item.changePct), getPriceClass(item.changePct)),
+                    buildDialogMetric('\u5747\u4ef7', formatMetricNumber(item.avg), getRelativeValueClass(item.avg, item.prevClose)),
+                    buildDialogMetric('\u6700\u9ad8', formatMetricNumber(item.high), getRelativeValueClass(item.high, item.prevClose)),
+                    buildDialogMetric('\u6700\u4f4e', formatMetricNumber(item.low), getRelativeValueClass(item.low, item.prevClose)),
+                    buildDialogMetric('\u632f\u5e45', formatMetricPercent(item.amplitude)),
+                    buildDialogMetric('\u6210\u4ea4\u91d1\u989d', formatAmountSummary(item.amount)),
+                    buildDialogMetric('\u603b\u624b', formatHandsSummary(item.totalHands)),
+                    buildDialogMetric('\u91cf\u6bd4', formatMetricNumber(item.volumeRatio))
+                ];
+            };
+
+            const openChartDialog = (row) => {
+                if (!row) return;
+                clearHoverShowTimer();
+                clearHoverHideTimer();
+                hideChartPopover();
+                chartDialog.source = 'stock';
+                chartDialog.symbol = row.fullCode || 'sh000001';
+                chartDialog.name = row.name || '';
+                chartDialog.type = chartHover.symbol === row.fullCode ? chartHover.type : 'min';
+                chartDialog.metrics = getStockDialogMetrics(row);
+                refreshDialogChartImage();
+                chartDialog.visible = true;
+            };
+
+            const openIndexChartDialog = (item) => {
+                if (!item) return;
+                chartDialog.source = 'index';
+                chartDialog.symbol = item.fullCode || 'sh000001';
+                chartDialog.name = item.name || item.shortName || '';
+                chartDialog.type = indexChartType.value;
+                chartDialog.metrics = getIndexDialogMetrics(item);
+                refreshDialogChartImage();
+                chartDialog.visible = true;
+            };
+
+            const updateChartPopoverPosition = (event) => {
+                if (!event) return;
+                lastHoverPointer = { clientX: event.clientX, clientY: event.clientY };
+                const modalWidth = chartPopoverRef.value?.offsetWidth || 440;
+                const modalHeight = chartPopoverRef.value?.offsetHeight || 330;
+                const viewportWidth = window.innerWidth;
+                const viewportHeight = window.innerHeight;
+                const gutter = 16;
+                const gap = 18;
+                const rowRect = hoveredRowElement?.getBoundingClientRect?.() || null;
+
+                let left = event.clientX + gap;
+                if (left + modalWidth > viewportWidth - gutter) {
+                    left = event.clientX - modalWidth - gap;
+                }
+                left = clampPosition(left, gutter, viewportWidth - modalWidth - gutter);
+
+                let top = event.clientY + gap;
+                if (rowRect) {
+                    const overlapsCurrentRow = top < rowRect.bottom + gap && top + modalHeight > rowRect.top - gap;
+                    if (overlapsCurrentRow) {
+                        const canPlaceBelow = rowRect.bottom + gap + modalHeight <= viewportHeight - gutter;
+                        const canPlaceAbove = rowRect.top - gap - modalHeight >= gutter;
+                        if (canPlaceBelow) {
+                            top = rowRect.bottom + gap;
+                        } else if (canPlaceAbove) {
+                            top = rowRect.top - modalHeight - gap;
+                        } else {
+                            top = viewportHeight - rowRect.bottom >= rowRect.top ? rowRect.bottom + gap : rowRect.top - modalHeight - gap;
+                        }
+                    }
+                }
+                top = clampPosition(top, gutter, viewportHeight - modalHeight - gutter);
+
+                chartHover.left = left;
+                chartHover.top = top;
+            };
+
+            const scheduleChartPopoverHide = () => {
+                clearHoverHideTimer();
+                hoverHideTimer = window.setTimeout(() => {
+                    if (isHoveringPriceTrigger || isHoveringChartPopover) return;
+                    hideChartPopover();
+                }, HOVER_CHART_HIDE_DELAY_MS);
+            };
+
+            const scheduleChartPopoverShow = (row) => {
+                clearHoverShowTimer();
+                hoverShowTimer = window.setTimeout(() => {
+                    if (!pendingHoverRow || pendingHoverRow.fullCode !== row.fullCode) return;
+                    if (!isHoveringPriceTrigger) return;
+                    const changedSymbol = chartHover.symbol !== row.fullCode;
+                    chartHover.symbol = row.fullCode || 'sh000001';
+                    chartHover.name = row.name || '';
+                    if (changedSymbol) {
+                        chartHover.type = 'min';
+                    }
+                    refreshHoverChartImage();
+                    chartHover.visible = true;
+                    nextTick(() => updateChartPopoverPosition(lastHoverPointer));
+                }, HOVER_CHART_DELAY_MS);
+            };
+
+            const handlePriceHoverEnter = (row, event) => {
+                if (isMobile.value) return;
+                isHoveringPriceTrigger = true;
+                pendingHoverRow = row;
+                hoveredRowElement = event?.target?.closest('tr') || null;
+                lastHoverPointer = event ? { clientX: event.clientX, clientY: event.clientY } : null;
+                clearHoverHideTimer();
+                scheduleChartPopoverShow(row);
+            };
+
+            const handlePriceHoverMove = (row, event) => {
+                if (isMobile.value) return;
+                pendingHoverRow = row;
+                hoveredRowElement = event?.target?.closest('tr') || hoveredRowElement;
+                lastHoverPointer = event ? { clientX: event.clientX, clientY: event.clientY } : lastHoverPointer;
+                if (chartHover.visible && chartHover.symbol === row.fullCode) {
+                    updateChartPopoverPosition(event);
+                }
+            };
+
+            const handlePriceHoverLeave = () => {
+                isHoveringPriceTrigger = false;
+                clearHoverShowTimer();
+                scheduleChartPopoverHide();
+            };
+
+            const handleChartPopoverEnter = () => {
+                isHoveringChartPopover = true;
+                clearHoverHideTimer();
+            };
+
+            const handleChartPopoverLeave = () => {
+                isHoveringChartPopover = false;
+                scheduleChartPopoverHide();
+            };
+
+            const switchHoverChart = (type) => {
+                if (type !== 'min' && type !== 'daily') return;
+                if (chartHover.type === type) return;
+                chartHover.type = type;
+                refreshHoverChartImage();
+                if (lastHoverPointer) {
+                    nextTick(() => updateChartPopoverPosition(lastHoverPointer));
+                }
+            };
+
+            const switchDialogChart = (type) => {
+                if (type !== 'min' && type !== 'daily') return;
+                if (chartDialog.type === type) return;
+                chartDialog.type = type;
+                refreshDialogChartImage();
+                if (chartDialog.source === 'index') {
+                    indexChartType.value = type;
+                    refreshIndexChartImages();
+                }
+            };
+
+
+            const isNearBuyPoint = (row, field) => {
+                const now = parseFloat(row?.now);
+                const buyPoint = parseFloat(row?.[field]);
+                if (!Number.isFinite(now) || !Number.isFinite(buyPoint) || now <= 0 || buyPoint <= 0) return false;
+                return Math.abs(buyPoint - now) / now <= 0.03;
+            };
+            // Business Logic from Calculator 6
+             const getHoldDays = (startDateStr) => {
+                if (!startDateStr) return 0;
+                const startDate = new Date(startDateStr);
+                const today = new Date();
+                startDate.setHours(0,0,0,0);
+                today.setHours(0,0,0,0);
+                if (startDate > today) return 1;
+                let days = 0;
+                let current = new Date(startDate);
+                while (current <= today) {
+                    const dayOfWeek = current.getDay();
+                    if (dayOfWeek !== 0 && dayOfWeek !== 6) days++;
+                    current.setDate(current.getDate() + 1);
+                }
+                return days;
+            };
+
+            const isTradingTime = () => {
+                const now = new Date();
+                const day = now.getDay();
+                if (day === 0 || day === 6) return false;
+                const time = now.getHours() * 100 + now.getMinutes();
+                return (time >= 910 && time <= 1205) || (time >= 1255 && time <= 1605);
+            };
+
+            const persistAutoRefreshSettings = () => {
+                localStorage.setItem(AUTO_REFRESH_ENABLED_KEY, autoRefreshEnabled.value ? 'true' : 'false');
+                localStorage.setItem(AUTO_REFRESH_INTERVAL_KEY, String(autoRefreshIntervalSec.value));
+            };
+
+            const stopAutoRefresh = () => {
+                if (autoRefreshTimer) {
+                    clearInterval(autoRefreshTimer);
+                    autoRefreshTimer = null;
+                }
+            };
+
+            const startAutoRefresh = () => {
+                stopAutoRefresh();
+                if (!autoRefreshEnabled.value) return;
+                autoRefreshTimer = setInterval(() => {
+                    if (isTradingTime()) refreshAllPrices(true);
+                }, autoRefreshIntervalSec.value * 1000);
+            };
+
+            const applyAutoRefreshSettings = () => {
+                autoRefreshIntervalSec.value = normalizeAutoRefreshInterval(autoRefreshIntervalSec.value);
+                persistAutoRefreshSettings();
+                startAutoRefresh();
+            };
+
+            const handleAutoRefreshToggle = () => {
+                autoRefreshIntervalSec.value = normalizeAutoRefreshInterval(autoRefreshIntervalSec.value);
+                persistAutoRefreshSettings();
+                startAutoRefresh();
+            };
+
+            const getAutoRefreshStatusText = () => {
+                if (!autoRefreshEnabled.value) return '(自动刷新已关闭)';
+                return isTradingTime() ? `(盘中每${autoRefreshIntervalSec.value}秒自动刷新)` : '(休市自动暂停)';
+            };
+
+            const getMobileRefreshText = () => {
+                return lastRefreshTime.value ? `上次 ${lastRefreshTime.value}` : '尚未刷新';
+            };
+
+            const getAutoRefreshBadgeText = () => {
+                if (!autoRefreshEnabled.value) return '已关闭';
+                return isTradingTime() ? '运行中' : '休市暂停';
+            };
+
+            const getAutoRefreshBadgeClass = () => {
+                if (!autoRefreshEnabled.value) return 'off';
+                return isTradingTime() ? 'running' : 'paused';
+            };
+
+            const saveToLocal = () => {
+                if (!userSorted) {
+                    tableData.value.forEach((row, i) => {
+                        if (row._sortIndex === undefined) row._sortIndex = i;
+                    });
+                }
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(tableData.value));
+            };
+
+            const tableRowClassName = ({ row }) => {
+                const now = parseFloat(row.now);
+                if (now <= parseFloat(row.f786)) return 'danger-row';
+                if (now <= parseFloat(row.f618)) return 'warning-row';
+                return '';
+            };
+
+            const sortData = () => {
+                if (userSorted) {
+                    tableData.value.sort((a, b) => {
+                        const idxA = a._sortIndex !== undefined ? a._sortIndex : 0;
+                        const idxB = b._sortIndex !== undefined ? b._sortIndex : 0;
+                        return idxA - idxB;
+                    });
+                } else {
+                    tableData.value.forEach((row, i) => { row._sortIndex = i; });
+                    tableData.value.sort((a, b) => {
+                        const c1 = parseFloat(a.cost) > 0 ? 1 : 0;
+                        const c2 = parseFloat(b.cost) > 0 ? 1 : 0;
+                        return c2 - c1;
+                    });
+                }
+            };
+
+            const handleBuyDateChange = (row, value) => {
+                const previousBuyDate = row._prevBuyDate || '';
+                const nextBuyDate = value || '';
+                const hasCost = row.cost !== undefined && row.cost !== null && String(row.cost).trim() !== '';
+
+                if (!nextBuyDate) {
+                    row.buyDate = '';
+                    row.cost = '';
+                    row._prevBuyDate = '';
+                    calculateRow(row);
+                    return;
+                }
+
+                if (!previousBuyDate && !hasCost) {
+                    const nowPrice = parseFloat(row.now);
+                    if (Number.isFinite(nowPrice) && nowPrice > 0) {
+                        row.cost = formatNum(nowPrice, row);
+                    }
+                }
+
+                row._prevBuyDate = nextBuyDate;
+                calculateRow(row);
+            };
+
+            const calculateRow = (row) => {
+                let now = parseFloat(row.now) || 0;
+                let cost = parseFloat(row.cost) || 0;
+                let low = parseFloat(row.low) || 0;
+                let high = parseFloat(row.high) || 0;
+                let avg = parseFloat(row.avg) || 0;
+
+                // Auto update high if current price > high
+                if (now > high && high > 0) {
+                    row.high = now;
+                    high = now;
+                    row.highDate = new Date().toISOString().split('T')[0];
+                    row._isNewHigh = true;
+                } else {
+                    row._isNewHigh = false;
+                }
+
+                const diff = high - low;
+                row.f382 = (high - diff * 0.382).toFixed(3);
+                row.f618 = (high - diff * 0.618).toFixed(3);
+                row.f786 = (high - diff * 0.786).toFixed(3);
+
+                const K = 0.98848;
+                if (avg > 0) {
+                    row.topLine = (avg / K).toFixed(3);
+                    row.bottomLine = (avg * K).toFixed(3);
+                } else {
+                    row.topLine = '0.00'; row.bottomLine = '0.00';
+                }
+
+                row.isBreakLow = false;
+                
+                // Logic for advice
+                if (cost > 0) {
+                    // Holding logic
+                    if (!row.buyDate) {
+                        const d = new Date();
+                        row.buyDate = d.toISOString().split('T')[0];
+                        row._prevBuyDate = row.buyDate;
+                    }
+                    const holdDays = getHoldDays(row.buyDate);
+                    const daysSinceHigh = row.highDate ? getHoldDays(row.highDate) : holdDays;
+
+                    if (low > 0 && now < low * 0.97) {
+                        row.signal = '破底止损'; row.adviceClass = 'suggestion-danger';
+                    } else if (now <= cost * 0.94) {
+                        row.signal = '止损(-6%)'; row.adviceClass = 'suggestion-danger';
+                    } else if (daysSinceHigh >= 13 && high > 0 && !row._isNewHigh) {
+                        row.signal = '时间证伪'; row.adviceClass = 'suggestion-warn';
+                    } else if (row._isNewHigh || (now === high && high > 0)) {
+                        row.signal = '突破新高'; row.adviceClass = 'suggestion-buy'; // Gold/Buy
+                    } else {
+                        row.signal = `持有(${holdDays}天)`; row.adviceClass = 'suggestion-hold';
+                    }
+                } else {
+                    // Observation logic
+                    const f382_val = parseFloat(row.f382);
+                    const f618_val = parseFloat(row.f618);
+                    const f786_val = parseFloat(row.f786);
+                    const f500_val = high - diff * 0.5;
+
+                    if (low > 0 && now < low) {
+                        row.isBreakLow = true; row.signal = '破位严禁'; row.adviceClass = 'suggestion-danger';
+                    } else if (row._isNewHigh) {
+                        row.signal = '突破跟进'; row.adviceClass = 'suggestion-buy';
+                    } else if (low > 0) {
+                        if (now < f786_val) {
+                            row.signal = '放弃(极弱)'; row.adviceClass = 'suggestion-观望';
+                        } else if (now < f618_val * 0.99) {
+                            row.signal = '跌破618'; row.adviceClass = 'suggestion-warn';
+                        } else if (now <= f500_val * 1.02) {
+                            row.signal = '强防生死线'; row.adviceClass = 'suggestion-hold'; // Blue
+                        } else if (now <= f382_val * 1.03) {
+                            row.signal = '常规买点'; row.adviceClass = 'suggestion-buy'; // Cyan -> Buy color?
+                        } else {
+                            row.signal = '高位观望'; row.adviceClass = 'suggestion-观望';
+                        }
+                    } else {
+                        row.signal = '观望'; row.adviceClass = 'suggestion-观望';
+                    }
+                }
+                saveToLocal();
+            };
+
+            const initSortable = () => {
+                if (tableRef.value) {
+                    const el = tableRef.value.$el.querySelector('.el-table__body-wrapper tbody');
+                    if(el) Sortable.create(el, { animation: 150, draggable: '.el-table__row', handle: '.drag-column', ghostClass: 'sortable-ghost', onEnd: onSortEnd });
+                }
+            };
+
+            const onSortEnd = (evt) => {
+                const { oldIndex, newIndex } = evt;
+                if (oldIndex === newIndex) return;
+                const targetRow = tableData.value.splice(oldIndex, 1)[0];
+                tableData.value.splice(newIndex, 0, targetRow);
+                userSorted = true;
+                saveToLocal();
+            };
+
+            const formatCode = (code) => {
+                code = code.trim().toLowerCase();
+                if (!code) return null;
+                if (/^(sh|sz|hk|bj)/.test(code)) return code;
+                if (/^\d+$/.test(code)) {
+                    if (code.length <= 4 || (code.length === 5 && code.startsWith('0'))) return 'hk' + code.padStart(5, '0');
+                    if (code.length === 6) {
+                        if (/^(5[168]|6)/.test(code)) return 'sh' + code;
+                        if (/^(1[568]|0|3)/.test(code)) return 'sz' + code;
+                        if (/^(4|8)/.test(code)) return 'bj' + code;
+                    }
+                }
+                return code;
+            };
+
+            const updateLastRefreshTime = () => {
+                const now = new Date();
+                lastRefreshTime.value = `${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+            };
+
+            const requestQuoteData = (codes, scriptId, onLoaded, onError) => {
+                if (!codes || codes.length === 0) {
+                    if (onLoaded) onLoaded();
+                    return;
+                }
+                const oldScript = document.getElementById(scriptId);
+                if (oldScript) oldScript.remove();
+                const script = document.createElement('script');
+                script.id = scriptId;
+                script.src = `https://qt.gtimg.cn/q=${codes.join(',')}`;
+                script.onerror = () => {
+                    script.remove();
+                    if (onError) onError();
+                };
+                script.onload = () => {
+                    if (onLoaded) onLoaded();
+                    script.remove();
+                };
+                document.body.appendChild(script);
+            };
+
+            const fetchMarketIndexes = () => {
+                if (isFetchingIndexOverview) return;
+                const codes = marketIndexData.value.map(item => item.fullCode);
+                if (codes.length === 0) return;
+                isFetchingIndexOverview = true;
+                requestQuoteData(codes, 'jsonp-index-overview', () => {
+                    const cacheKey = Date.now();
+                    marketIndexData.value.forEach(item => {
+                        const dataStr = window[`v_${item.fullCode}`];
+                        if (!dataStr) return;
+                        const d = dataStr.split('~');
+                        const nowPrice = parseFloat(d[3]);
+                        const prevClose = parseFloat(d[4]);
+                        const openPrice = parseFloat(d[5]);
+                        const changeValue = parseFloat(d[31]);
+                        const changePct = parseFloat(d[32]);
+                        const dayHigh = parseFloat(d[33]);
+                        const dayLow = parseFloat(d[34]);
+                        const tradeSummary = (d[35] || '').split('/');
+                        const totalHands = parseFloat(d[36]);
+                        let amount = parseFloat(tradeSummary[2]);
+                        const amplitude = parseFloat(d[43]);
+                        const volumeRatio = parseFloat(d[49]);
+                        const avgPrice = parseFloat(d[51]);
+                        const quoteAmountWan = parseFloat(d[57]);
+                        if (!Number.isFinite(amount) && Number.isFinite(quoteAmountWan)) {
+                            amount = quoteAmountWan * 10000;
+                        }
+                        item.name = d[1] || item.name;
+                        item.now = Number.isFinite(nowPrice) ? nowPrice : item.now;
+                        item.prevClose = Number.isFinite(prevClose) ? prevClose : item.prevClose;
+                        item.change = Number.isFinite(changeValue) ? changeValue : (Number.isFinite(nowPrice) && Number.isFinite(prevClose) ? nowPrice - prevClose : item.change);
+                        item.changePct = Number.isFinite(changePct) ? changePct : item.changePct;
+                        item.open = Number.isFinite(openPrice) ? openPrice : item.open;
+                        item.high = Number.isFinite(dayHigh) ? dayHigh : item.high;
+                        item.low = Number.isFinite(dayLow) ? dayLow : item.low;
+                        item.avg = Number.isFinite(avgPrice) ? avgPrice : item.avg;
+                        item.totalHands = Number.isFinite(totalHands) ? totalHands : item.totalHands;
+                        item.amount = Number.isFinite(amount) ? amount : item.amount;
+                        item.amplitude = Number.isFinite(amplitude) ? amplitude : item.amplitude;
+                        item.volumeRatio = Number.isFinite(volumeRatio) ? volumeRatio : item.volumeRatio;
+                        item.chartCacheKey = cacheKey;
+                    });
+                    isFetchingIndexOverview = false;
+                    updateLastRefreshTime();
+                }, () => {
+                    isFetchingIndexOverview = false;
+                });
+            };
+
+            
+            const fetchData = (codes, isAddition = true, isAuto = false) => {
+                if (codes.length === 0) return;
+                if (isFetchingData.value) return;
+                isFetchingData.value = true;
+                if (!isAuto) loading.value = true;
+                requestQuoteData(codes, 'jsonp-stock', () => {
+                    codes.forEach(code => {
+                        const dataStr = window[`v_${code}`];
+                        if (dataStr) {
+                            const d = dataStr.split('~');
+                            const nowPrice = parseFloat(d[3]);
+                            const prevClose = parseFloat(d[4]);
+                            const openPrice = parseFloat(d[5]);
+                            const changeValue = parseFloat(d[31]);
+                            const changePct = parseFloat(d[32]) || 0;
+                            const dayHigh = parseFloat(d[33]);
+                            const dayLow = parseFloat(d[34]);
+                            const tradeSummary = (d[35] || '').split('/');
+                            const totalHands = parseFloat(d[36]);
+                            let turnover = parseFloat(d[37]);
+                            let volume = totalHands;
+                            let amount = parseFloat(tradeSummary[2]);
+                            const amplitude = parseFloat(d[43]);
+                            const limitUp = parseFloat(d[47]);
+                            const limitDown = parseFloat(d[48]);
+                            const volumeRatio = parseFloat(d[49]);
+                            const quoteAvg = parseFloat(d[51]);
+                            const quoteAmountWan = parseFloat(d[57]);
+                            let newAvg = 0;
+                            if (!Number.isFinite(amount) && Number.isFinite(quoteAmountWan)) {
+                                amount = quoteAmountWan * 10000;
+                            }
+                            if (code.startsWith('hk')) {
+                                newAvg = volume > 0 ? turnover / volume : parseFloat(d[4]);
+                            } else if (code.startsWith('sh68') || code.startsWith('bj')) {
+                                newAvg = volume > 0 ? (turnover * 10000) / volume : parseFloat(d[4]);
+                            } else {
+                                newAvg = volume > 0 ? (turnover * 10000) / (volume * 100) : parseFloat(d[4]);
+                            }
+                            if (Number.isFinite(quoteAvg)) {
+                                newAvg = quoteAvg;
+                            }
+                            const avgPrice = Number.isFinite(newAvg) ? parseFloat(newAvg.toFixed(3)) : 0;
+                            const resolvedChange = Number.isFinite(changeValue)
+                                ? changeValue
+                                : (Number.isFinite(nowPrice) && Number.isFinite(prevClose) ? nowPrice - prevClose : 0);
+
+                            const idx = tableData.value.findIndex(item => item.fullCode === code);
+                            if (idx > -1) {
+                                const item = tableData.value[idx];
+                                item.name = d[1] || item.name;
+                                item.now = nowPrice;
+                                item.prevClose = Number.isFinite(prevClose) ? prevClose : item.prevClose;
+                                item.open = Number.isFinite(openPrice) ? openPrice : item.open;
+                                item.change = Number.isFinite(resolvedChange) ? resolvedChange : item.change;
+                                item.changePct = changePct;
+                                item.dayHigh = Number.isFinite(dayHigh) ? dayHigh : item.dayHigh;
+                                item.dayLow = Number.isFinite(dayLow) ? dayLow : item.dayLow;
+                                item.avg = avgPrice;
+                                item.totalHands = Number.isFinite(totalHands) ? totalHands : item.totalHands;
+                                item.amount = Number.isFinite(amount) ? amount : item.amount;
+                                item.amplitude = Number.isFinite(amplitude) ? amplitude : item.amplitude;
+                                item.limitUp = Number.isFinite(limitUp) ? limitUp : item.limitUp;
+                                item.limitDown = Number.isFinite(limitDown) ? limitDown : item.limitDown;
+                                item.volumeRatio = Number.isFinite(volumeRatio) ? volumeRatio : item.volumeRatio;
+                                if ((!parseFloat(item.high) || parseFloat(item.high) <= 0) && Number.isFinite(dayHigh)) item.high = dayHigh;
+                                if ((!parseFloat(item.low) || parseFloat(item.low) <= 0) && Number.isFinite(dayLow)) item.low = dayLow;
+                                calculateRow(item);
+                            } else if (isAddition) {
+                                const newItem = reactive({
+                                    name: d[1], fullCode: code, now: nowPrice,
+                                    prevClose: Number.isFinite(prevClose) ? prevClose : '',
+                                    open: Number.isFinite(openPrice) ? openPrice : '',
+                                    change: Number.isFinite(resolvedChange) ? resolvedChange : 0,
+                                    changePct: changePct, cost: '',
+                                    high: dayHigh || nowPrice, low: dayLow || nowPrice, buyDate: '', highDate: '',
+                                    dayHigh: Number.isFinite(dayHigh) ? dayHigh : nowPrice,
+                                    dayLow: Number.isFinite(dayLow) ? dayLow : nowPrice,
+                                    avg: avgPrice,
+                                    totalHands: Number.isFinite(totalHands) ? totalHands : '',
+                                    amount: Number.isFinite(amount) ? amount : '',
+                                    amplitude: Number.isFinite(amplitude) ? amplitude : '',
+                                    limitUp: Number.isFinite(limitUp) ? limitUp : '',
+                                    limitDown: Number.isFinite(limitDown) ? limitDown : '',
+                                    volumeRatio: Number.isFinite(volumeRatio) ? volumeRatio : '',
+                                    position: 0, signal: '', f382: 0, f618: 0, f786: 0, topLine: 0, bottomLine: 0, _prevBuyDate: '',
+                                    monitor: true
+                                });
+                                calculateRow(newItem);
+                                tableData.value.unshift(newItem);
+                            }
+                        }
+                    });
+                    isFetchingData.value = false;
+                    if (!isAuto) loading.value = false;
+                    updateLastRefreshTime();
+                    saveToLocal();
+                    if (isAddition) inputCodes.value = "";
+                }, () => {
+                    isFetchingData.value = false;
+                    if (!isAuto) loading.value = false;
+                });
+            };
+
+            const addNewCodes = () => {
+                const codes = inputCodes.value.split(/[,\s\n]/).map(c => formatCode(c)).filter(c => c);
+                if(codes.length > 0) fetchData(codes, true);
+                else ElMessage.warning('请输入有效的股票代码');
+            };
+
+            const refreshAllPrices = (isAuto = false) => {
+                fetchMarketIndexes();
+                const currentCodes = tableData.value.map(item => item.fullCode);
+                if (currentCodes.length > 0) fetchData(currentCodes, false, isAuto);
+            };
+
+            const removeItem = (index) => {
+                const item = tableData.value[index];
+                const msg = `确定删除 <b>${item.fullCode} ${item.name}</b> 吗？`;
+                 ElMessageBox.confirm(msg, '删除确认', { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning', dangerouslyUseHTMLString: true })
+                    .then(() => {
+                        tableData.value.splice(index, 1);
+                        saveToLocal();
+                    });
+            };
+
+            const clearAll = () => {
+                ElMessageBox.confirm('确定清空所有数据并重置免责声明确认状态吗？', '警告', { confirmButtonText: '清空', cancelButtonText: '取消', type: 'warning' }).then(() => {
+                    tableData.value = [];
+                    localStorage.removeItem(DISCLAIMER_KEY);
+                    saveToLocal();
+                    showDisclaimer.value = true;
+                }).catch(() => {});
+            };
+
+            const triggerImport = () => fileInput.value.click();
+            
+            const exportData = () => {
+                let csv = '\uFEFF代码,名称,最新价,阶段顶部,阶段底部,均价,成本价,建仓日期,新高日期,持仓数量,监控\n';
+                tableData.value.forEach(row => {
+                    csv += `${row.fullCode},${row.name},${row.now},${row.high},${row.low},${row.avg},${row.cost},${row.buyDate||''},${row.highDate||''},${row.position||0},${row.monitor !== false ? '1' : '0'}\n`;
+                });
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(blob);
+                link.download = "watchlist.csv";
+                link.click();
+            };
+
+            const importData = (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.readAsArrayBuffer(file);
+                reader.onload = (e) => {
+                    const buffer = e.target.result;
+                    let text = '';
+                    const decoderUTF8 = new TextDecoder('utf-8');
+                    const decodedUTF8 = decoderUTF8.decode(buffer);
+                    if (decodedUTF8.includes('代码') || decodedUTF8.includes('名称')) {
+                        text = decodedUTF8;
+                    } else {
+                        try {
+                            const decoderGBK = new TextDecoder('gbk');
+                            text = decoderGBK.decode(buffer);
+                        } catch (e) {
+                            text = decodedUTF8;
+                        }
+                    }
+                    const lines = text.split('\n').filter(l => l.trim());
+                    if (lines.length <= 1) return;
+                    lines.slice(1).forEach(line => {
+                        const cols = line.split(',');
+                        if (cols.length >= 2) {
+                            const code = formatCode(cols[0]);
+                            if (!code) return;
+                            const safeVal = (val, def = '') => (val === undefined || val === 'null' || val.trim() === '') ? def : val.trim();
+                            const itemData = {
+                                fullCode: code, name: safeVal(cols[1]), now: safeVal(cols[2], 0),
+                                high: safeVal(cols[3], 0), low: safeVal(cols[4], 0), avg: safeVal(cols[5], 0),
+                                cost: safeVal(cols[6]), buyDate: safeVal(cols[7]), highDate: safeVal(cols[8]),
+                                position: parseFloat(safeVal(cols[9], 0)) || 0,
+                                monitor: safeVal(cols[10], '1') !== '0',
+                                _prevBuyDate: safeVal(cols[7])
+                            };
+                            const idx = tableData.value.findIndex(t => t.fullCode === code);
+                            if (idx > -1) {
+                                Object.assign(tableData.value[idx], itemData);
+                                calculateRow(tableData.value[idx]);
+                            } else {
+                                const newItem = reactive({ ...itemData, position: itemData.position || 0, _prevBuyDate: itemData.buyDate || '', changePct: 0, signal: '', f382: 0, f618: 0, f786: 0, topLine: 0, bottomLine: 0, monitor: itemData.monitor !== false });
+                                calculateRow(newItem);
+                                tableData.value.unshift(newItem);
+                            }
+                        }
+                    });
+                    sortData();
+                    ElMessage.success('导入成功');
+                    refreshAllPrices();
+                    event.target.value = '';
+                };
+            };
+
+            onMounted(() => {
+                let hasLoadedCached = false;
+                const hasAccepted = localStorage.getItem(DISCLAIMER_KEY);
+                if (!hasAccepted) {
+                    showDisclaimer.value = true;
+                }
+                const cached = localStorage.getItem(STORAGE_KEY);
+                if (cached) {
+                    try {
+                        const parsed = JSON.parse(cached);
+                        tableData.value = parsed.map(item => reactive({ ...item, position: item.position || 0, monitor: item.monitor !== false, _prevBuyDate: item.buyDate || '' }));
+                        sortData();
+                        hasLoadedCached = true;
+                        refreshAllPrices();
+                    } catch(e){}
+                }
+                if (!hasLoadedCached) {
+                    fetchMarketIndexes();
+                }
+                nextTick(initSortable);
+                applyAutoRefreshSettings();
+
+            });
+            onUnmounted(() => {
+                stopAutoRefresh();
+                clearHoverShowTimer();
+                clearHoverHideTimer();
+                window.removeEventListener('resize', handleWindowResize);
+            });
+
+            return {
+                locale, inputCodes, tableData, loading, fileInput, tableRef,
+                addNewCodes, refreshAllPrices, calculateRow, handleBuyDateChange, removeItem, clearAll, isMobile, lastRefreshTime,
+                autoRefreshEnabled, autoRefreshIntervalSec, handleAutoRefreshToggle, applyAutoRefreshSettings,
+                triggerImport, exportData, importData, tableRowClassName, getPriceClass, formatPct, formatNum, isNearBuyPoint, isTradingTime,
+                showIndexCharts, marketIndexData, toggleIndexOverviewMode, getIndexOverviewToggleText, getIndexChartUrl, formatMetricNumber, formatSignedMetricNumber,
+                formatMetricPercent, formatAmountSummary, getRelativeValueClass, getTwoMarketAmountText,
+                indexChartTriggerTitle, toggleIndexChartType, getIndexChartTypeToggleText, getIndexOverviewSummaryText, openIndexChartDialog,
+                getAutoRefreshStatusText, getMobileRefreshText, getAutoRefreshBadgeText, getAutoRefreshBadgeClass,
+                showDisclaimer, acceptDisclaimer, showHelpDialog, openHelpDialog,
+                priceChartTriggerTitle,
+                chartPopoverRef, chartHover, getHoverChartUrl, switchHoverChart,
+                handlePriceHoverEnter, handlePriceHoverMove, handlePriceHoverLeave,
+                handleChartPopoverEnter, handleChartPopoverLeave,
+                chartDialog, getDialogChartUrl, openChartDialog, closeChartDialog, switchDialogChart,
+                launchMonitor, getPositionPct, formatPositionPct, getProfitInfo,
+                monitorAll, toggleMonitorAll
+            };
+        }
+    };
+    const app = createApp(App);
+    app.use(ElementPlus);
+    app.mount('#app');
+</script>
+</body>
+</html>
