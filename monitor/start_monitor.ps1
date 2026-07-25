@@ -5,16 +5,31 @@
 #>
 
 $taskName = "StockMonitorWake"
-# Python 解释器路径：优先环境变量 WB_PYTHON，其次 PATH 中的 python/python3，最后给出可读错误。
+# Python 解释器路径解析顺序：
+#   1) 环境变量 WB_PYTHON（显式覆盖，最高优先级）
+#   2) WorkBuddy 内置 Python（位于 $env:USERPROFILE\.workbuddy\binaries\python\versions\<最新版本>\python.exe，已含 requests/schedule，开箱即用）
+#   3) PATH 中的 python / python3
+#   4) 以上都没有 → 给出可读错误
 if ($env:WB_PYTHON) {
     $pythonExe = $env:WB_PYTHON
-} elseif (Get-Command python -ErrorAction SilentlyContinue) {
-    $pythonExe = "python"
-} elseif (Get-Command python3 -ErrorAction SilentlyContinue) {
-    $pythonExe = "python3"
 } else {
-    Write-Error "未找到 Python。请安装 Python 并加入 PATH，或设置环境变量 WB_PYTHON 指向 python.exe（如 WorkBuddy 内置 python）。"
-    exit 1
+    $pythonExe = $null
+    $wbRoot = Join-Path $env:USERPROFILE ".workbuddy\binaries\python\versions"
+    if (Test-Path $wbRoot) {
+        $wbPy = Get-ChildItem $wbRoot -Directory | Sort-Object Name | Select-Object -Last 1 |
+                ForEach-Object { Join-Path $_.FullName "python.exe" }
+        if ($wbPy -and (Test-Path $wbPy)) { $pythonExe = $wbPy }
+    }
+    if (-not $pythonExe -and (Get-Command python -ErrorAction SilentlyContinue)) {
+        $pythonExe = "python"
+    }
+    if (-not $pythonExe -and (Get-Command python3 -ErrorAction SilentlyContinue)) {
+        $pythonExe = "python3"
+    }
+    if (-not $pythonExe) {
+        Write-Error "未找到 Python。请安装 Python 并加入 PATH，或设置环境变量 WB_PYTHON 指向 python.exe（如 WorkBuddy 内置 python）。"
+        exit 1
+    }
 }
 $workDir = $PSScriptRoot
 
