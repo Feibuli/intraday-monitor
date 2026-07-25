@@ -119,6 +119,29 @@ def _pick(d, *keys, default=None):
     return default
 
 
+def _decode_resp(resp):
+    """读取响应体并按正确编码(默认 GBK)解码为文本。
+
+    NGA 的 lite/HTML 接口统一以 GBK (Content-Type: ...; charset=GBK) 返回，
+    若按 UTF-8 解码中文会全部乱码。这里优先采用响应头声明的 charset，
+    失败则回退 GBK/gb18030/UTF-8。
+    """
+    raw = resp.read()
+    enc = "gbk"  # NGA 默认编码
+    try:
+        c = resp.headers.get_content_charset()
+        if c:
+            enc = c
+    except Exception:
+        pass
+    for attempt in (enc, "gb18030", "utf-8"):
+        try:
+            return raw.decode(attempt)
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return raw.decode("utf-8", "ignore")
+
+
 def parse_ts(ts, ds):
     """解析 NGA 时间戳：优先 Unix 秒；否则尝试解析日期字符串。"""
     if ts:
@@ -165,6 +188,10 @@ def clean_text(s):
         s = s.replace(k, v)
     s = html.unescape(s)
     s = re.sub(r"\[[^\]]*\]", " ", s)        # 去掉 [img] [quote] 等 NGA 标签
+    # 去掉 NGA 引用前缀 "Reply Post by 用户名 (时间): "（时间冗余，列表已单独显示）
+    # 注意原始内容形如 [quote]...[b]Post by [uid]名[/uid] (时间): [/b]正文 ，
+    # 经上面的 [..] 标签清理后会变成 "  Reply  Post by 名 (时间): "，故用 \s+ 容忍空格。
+    s = re.sub(r"^\s*Reply\s+Post\s+by\s+.+?\(\d{4}-\d{2}-\d{2}[^)]*\):\s*", "", s)
     s = re.sub(r"\s+", " ", s)
     return s.strip()
 
@@ -360,9 +387,9 @@ class NgaMonitor:
             })
             try:
                 with urllib.request.urlopen(req, timeout=20) as resp:
-                    return resp.read().decode("utf-8", "ignore")
+                    return _decode_resp(resp)
             except urllib.error.HTTPError as e:
-                body = e.read().decode("utf-8", "ignore")
+                body = _decode_resp(e)
                 if e.code == 403:
                     raise NgaError("NGA 返回 403 未授权（多半是未登录，请在配置中填写 NGA 登录 Cookie）")
                 if body.strip().startswith("{"):
