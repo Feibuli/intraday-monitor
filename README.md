@@ -20,6 +20,7 @@ intraday-monitor/
 ├── monitor/                        # 可选：Python 监控后端
 │   ├── stock_monitor.py            # 监控主程序（突破告警 + 企业微信推送）
 │   ├── start_monitor.ps1           # Windows 启动器（注册交易日 9:15 唤醒任务）
+│   └── start_monitor.sh            # macOS / Linux 启动器
 │   ├── requirements.txt            # Python 依赖
 │   ├── .env.example                # 企业微信 Webhook 配置模板
 │   └── watchlist.example.csv       # 自选股列表模板
@@ -80,15 +81,27 @@ cp monitor/.env.example monitor/.env
 
 ### 4. 运行
 
-```bash
-# 方式 A：直接运行
-cd monitor && python stock_monitor.py
+三种方式任选其一，**全平台通用的是方式 A**：
 
-# 方式 B：Windows 启动器（会注册交易日 9:15 唤醒任务，需管理员权限）
+```bash
+# 方式 A：直接运行（Windows / macOS / Linux 通用，最简单）
+cd monitor && python stock_monitor.py        # 或 python3 stock_monitor.py
+
+# 方式 B：Windows 启动器（会注册交易日 9:15 唤醒任务，首次需管理员权限）
 powershell -ExecutionPolicy Bypass -File monitor/start_monitor.ps1
+
+# 方式 C：macOS / Linux 启动器
+bash monitor/start_monitor.sh
 ```
 
-Python 解释器优先级：环境变量 `WB_PYTHON` → PATH 中的 `python`/`python3`。
+如果本机有多个 Python，启动器会自动挑选：
+
+1. 环境变量 `WB_PYTHON`（显式指定，最高优先级）
+2. **WorkBuddy 内置 Python**（`~/.workbuddy/binaries/python/versions/<最新版本>/python`，已含 `requests`/`schedule`，开箱即用）
+3. PATH 中的 `python3` / `python`
+
+> Windows 的「交易日 9:15 唤醒任务」仅 Windows 生效（用系统计划任务实现）；macOS/Linux 用 `start_monitor.sh` 在前台运行即可，如需开机自启可自行用 `launchd` / `cron` 包装。
+> 在牛股计算器页面点「启动监控」按钮时，会按当前系统自动复制对应的启动命令（Windows→`.ps1`，macOS/Linux→`.sh`）。
 
 ---
 

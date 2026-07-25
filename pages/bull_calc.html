@@ -1258,11 +1258,20 @@
                 const here = fileUrlToFsPath(location.href);            // .../intraday-monitor/pages/bull_calc.html
                 const pagesDir = here.replace(/[\\/][^\\/]*$/, '');       // .../intraday-monitor/pages
                 const repoDir = pagesDir.replace(/[\\/][^\\/]*$/, '');   // .../intraday-monitor
-                const psPath = repoDir + '/monitor/start_monitor.ps1';   // 回退到仓库根再进 monitor/
-                const cmd = `powershell -ExecutionPolicy Bypass -File "${psPath}"`;
+                const isWin = /Win/i.test(navigator.platform) || /Windows/i.test(navigator.userAgent);
+                let cmd, tip;
+                if (isWin) {
+                    const psPath = repoDir + '/monitor/start_monitor.ps1';   // 回退到仓库根再进 monitor/
+                    cmd = `powershell -ExecutionPolicy Bypass -File "${psPath}"`;
+                    tip = '启动命令已复制 → 右键管理员运行 cmd，粘贴回车（首次需管理员权限创建唤醒任务）';
+                } else {
+                    const shPath = repoDir + '/monitor/start_monitor.sh';
+                    cmd = `bash "${shPath}"`;
+                    tip = '启动命令已复制 → 打开终端粘贴回车（macOS / Linux 用 start_monitor.sh）';
+                }
                 navigator.clipboard.writeText(cmd).then(() => {
                     ElMessage({
-                        message: '启动命令已复制 → 右键管理员运行 cmd，粘贴回车（首次需管理员权限创建唤醒任务）',
+                        message: tip,
                         type: 'success',
                         duration: 6000,
                         showClose: true,
