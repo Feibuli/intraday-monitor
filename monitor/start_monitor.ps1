@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Stock Monitor Launcher - creates weekday 9:15 wake task, then starts monitor.
     Run as administrator for the wake task feature.
@@ -41,7 +41,11 @@ Write-Host ""
 Write-Host "[2/2] Starting stock monitor..."
 Set-Location $workDir
 & $pythonExe "$workDir\stock_monitor.py"
+$monitorExit = $LASTEXITCODE
 
 Write-Host ""
 Write-Host "Monitor stopped."
+if ($monitorExit -ne 0) {
+    Write-Warning "监控进程异常退出（退出码 $monitorExit）。常见原因：未安装依赖（requests/schedule），或 WB_PYTHON 指向的 Python 不正确。请运行 'python -m pip install -r requirements.txt' 或设置 WB_PYTHON 指向已安装依赖的 Python。"
+}
 Read-Host "Press Enter to exit"

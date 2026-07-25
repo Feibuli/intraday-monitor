@@ -12,11 +12,22 @@ sys.stdout.reconfigure(line_buffering=True)  # 强制行缓冲，确保nohup后�
 
 import csv
 import time
-import requests
-import schedule
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
-import os
+
+try:
+    import requests
+    import schedule
+except ImportError as e:
+    sys.stderr.write(
+        "\n[错误] 缺少必需的第三方库 requests / schedule。\n"
+        "请在该 Python 环境下安装依赖：\n"
+        "    python -m pip install -r requirements.txt\n"
+        "或设置环境变量 WB_PYTHON 指向已安装依赖的 Python（如 WorkBuddy 内置 Python）。\n"
+        f"ImportError: {e}\n"
+    )
+    sys.exit(1)
 
 # ===================== 配置区域 =====================
 # 企业微信机器人 webhook 地址：从环境变量读取，切勿硬编码密钥入库。
