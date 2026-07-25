@@ -1,9 +1,10 @@
 {
-  "tid": 47207407,
-  "authorids": [150058],
+  "tid": [47207407, 47207408],
+  "authorids": [150058, 123456],
   "monitor_enabled": true,
   "refresh_interval": 60,
   "display_count": 30,
-  "nga_cookie": "",
+  "nga_uid": "你的NGA登录UID",
+  "nga_cid": "你的NGA登录CID",
   "port": 8765
 }

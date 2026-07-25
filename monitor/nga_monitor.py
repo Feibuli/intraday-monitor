@@ -6,8 +6,9 @@ NGA 大佬监控后端（纯标准库，无需 pip 安装任何第三方依赖�
 核心能力：
   1. 监控：开启监控后，指定帖子(tid)下、指定作者(authorid)一旦有新发言，
      立即推送企业微信机器人。
-  2. 配置：帖子ID / 作者ID（多个用逗号分隔）/ 监控开关 / 刷新频率(默认60秒)
-     / 展示条数(默认30条) / NGA 登录 Cookie，全部可在页面内配置。
+  2. 配置：帖子ID（多个用逗号分隔）/ 作者ID（多个用逗号分隔）/ 监控开关
+     / 刷新频率(默认60秒) / 展示条数(默认30条) / NGA 登录 UID 与 CID
+     （页面只填这两个 id，后端自动拼成 Cookie），全部可在页面内配置。
   3. 展示：内置 HTTP 服务，页面展示大佬最近发言，自动刷新。
 
 为什么需要 NGA Cookie？
@@ -79,7 +80,8 @@ DEFAULT_CONFIG = {
     "monitor_enabled": True,
     "refresh_interval": 60,   # 秒
     "display_count": 30,      # 条
-    "nga_cookie": "",
+    "nga_uid": "",            # NGA 登录 UID（ngaPassportUid）
+    "nga_cid": "",            # NGA 登录 CID（ngaPassportCid）
     "port": 8765,
 }
 
@@ -117,6 +119,15 @@ def _pick(d, *keys, default=None):
         if k in d and d[k] not in (None, ""):
             return d[k]
     return default
+
+
+def _build_cookie(cfg):
+    """由 nga_uid / nga_cid 拼出 NGA 登录 Cookie 字符串（页面只让填这两个 id）。"""
+    uid = cfg.get("nga_uid") or ""
+    cid = cfg.get("nga_cid") or ""
+    if uid or cid:
+        return f"ngaPassportUid={uid}; ngaPassportCid={cid}"
+    return ""
 
 
 def _decode_resp(resp):
@@ -382,7 +393,7 @@ class NgaMonitor:
             req = urllib.request.Request(url, headers={
                 "User-Agent": UA,
                 "Referer": f"https://bbs.nga.cn/read.php?tid={tid}",
-                "Cookie": self.config.get("nga_cookie", "") or "",
+                "Cookie": _build_cookie(self.config),
                 "Accept": "*/*",
             })
             try:
@@ -506,7 +517,7 @@ class NgaMonitor:
         """应用前端提交的新配置，并触发一次静默重新播种（避免改配置时刷屏推送）。"""
         with self.lock:
             for k in ("tid", "authorids", "monitor_enabled", "refresh_interval",
-                      "display_count", "nga_cookie", "port"):
+                      "display_count", "nga_uid", "nga_cid", "port"):
                 if k in new_cfg:
                     self.config[k] = new_cfg[k]
             save_config(self.config)
@@ -531,7 +542,7 @@ class NgaMonitor:
                 "last_success": last_success,
                 "last_error": last_error,
                 "cached": len(posts),
-                "has_cookie": bool(cfg.get("nga_cookie")),
+                "has_cookie": bool(cfg.get("nga_uid") and cfg.get("nga_cid")),
                 "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             },
             "config": {
@@ -541,9 +552,9 @@ class NgaMonitor:
                 "refresh_interval": cfg.get("refresh_interval"),
                 "display_count": cfg.get("display_count"),
                 "port": cfg.get("port"),
-                "nga_cookie": (cfg.get("nga_cookie") if include_cookie
-                               else ("*" * 8 if cfg.get("nga_cookie") else "")),
-                "has_cookie": bool(cfg.get("nga_cookie")),
+                "nga_uid": cfg.get("nga_uid", ""),
+                "nga_cid": cfg.get("nga_cid", ""),
+                "has_cookie": bool(cfg.get("nga_uid") and cfg.get("nga_cid")),
             },
             "posts": visible,
         }
