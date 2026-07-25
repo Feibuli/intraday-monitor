@@ -65,20 +65,22 @@
  .post a{color:var(--blue);text-decoration:none;font-size:12px}
  .post a:hover{text-decoration:underline}
  .empty{color:var(--muted);font-size:13px;text-align:center;padding:30px 0}
- .statusline{font-size:12px;color:var(--muted);margin-bottom:10px;display:flex;gap:16px;flex-wrap:wrap}
+ .statusline{font-size:12px;color:var(--muted);margin-bottom:10px;display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+ .statusline b{color:var(--text)}
  .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#0a1626;border:1px solid var(--line-strong);
    color:var(--text);padding:10px 18px;border-radius:10px;font-size:13px;opacity:0;transition:.25s;pointer-events:none}
  .toast.show{opacity:1}
  details summary{cursor:pointer;color:var(--blue);font-size:12px;margin-top:6px}
  details[open] summary{margin-bottom:8px}
- .cfgbar{display:flex;justify-content:space-between;align-items:center;cursor:pointer}
+ .cfgbar{display:block;cursor:pointer}
  .guide code{display:block;background:#06101c;border:1px solid var(--line);border-radius:10px;padding:11px 13px;
    color:var(--cyan);font-size:13px;margin:8px 0;word-break:break-all;font-family:"SFMono-Regular",Consolas,monospace}
+ .pill{display:inline-block;font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:20px;padding:2px 9px;margin-left:8px}
 </style>
 </head>
 <body>
 <div class="wrap" id="app">
-  <!-- 内容由 JS 根据运行模式注入 -->
+  <!-- 内容由 JS 根据后端连接状态注入（始终单页，不另开窗口） -->
 </div>
 <div class="toast" id="toast"></div>
 
@@ -86,10 +88,9 @@
 (function(){
   const app = document.getElementById('app');
   const toastEl = document.getElementById('toast');
-  const isServer = location.protocol === 'http:' || location.protocol === 'https:';
   const DEFAULT_PORT = 8765;
   const portParam = new URLSearchParams(location.search).get('port') || DEFAULT_PORT;
-  let BACKEND = '';   // '' 表示本页正由 NGA 后端托管（用相对路径）；否则指向本地后端地址
+  let BACKEND = '';            // '' 表示本页由 NGA 后端托管（用相对路径）；否则指向本地后端地址
 
   // 解析真正的 NGA 后端地址：先试相对路径（本页由后端托管），失败则指向本地 8765
   async function resolveBackend(){
@@ -103,22 +104,51 @@
     return 'http://localhost:' + portParam;
   }
 
+  async function api(path, opts){
+    const r = await fetch(BACKEND + path, Object.assign({headers:{'Content-Type':'application/json'}}, opts||{}));
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.json();
+  }
+
   function toast(msg){
     toastEl.textContent = msg; toastEl.classList.add('show');
     clearTimeout(toast._t); toast._t = setTimeout(()=>toastEl.classList.remove('show'), 1800);
   }
   function el(tag, cls, txt){ const e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
+  function escapeHtml(s){ return (s||'').replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 
-  // ============ 模式一：由后端 HTTP 服务提供（完整功能） ============
+  function copyText(t){
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(t).then(()=>toast('已复制命令')).catch(()=>fallbackCopy(t));
+    } else fallbackCopy(t);
+  }
+  function fallbackCopy(t){
+    const ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta);
+    ta.select(); try{document.execCommand('copy'); toast('已复制命令');}catch(e){ toast('请手动复制'); }
+    document.body.removeChild(ta);
+  }
+
+  // ============ 入口：先探测后端，再决定渲染完整界面还是启动指引（都在本页） ============
+  async function boot(){
+    BACKEND = await resolveBackend();
+    try{
+      await api('/api/status');
+      renderFull();
+    }catch(e){
+      renderGuide();
+    }
+  }
+
+  // ============ 完整界面：配置 + 最近发言（均在同一个页面内） ============
   function renderFull(){
     app.innerHTML = '';
     const h1 = el('h1'); h1.appendChild(el('span','dot', '')); h1.appendChild(el('span',null,'NGA 大佬监控'));
+    h1.appendChild(el('span','pill', '全天候运行 · 24h'));
     app.appendChild(h1);
-    app.appendChild(el('div','sub','监控指定帖子下大佬的发言，新发言自动推送企业微信'));
+    app.appendChild(el('div','sub','监控指定帖子下大佬的发言，新发言自动推送企业微信（页面仅展示快照，推送由后端脚本执行）'));
 
     const banner = el('div','banner'); banner.id='banner'; app.appendChild(banner);
 
-    // 状态行
     const status = el('div','statusline'); status.id='status'; app.appendChild(status);
 
     // 配置卡片
@@ -142,7 +172,7 @@
       <div class="row">
         <div class="field" style="flex:0 0 200px"><label>监控推送</label>
           <div class="toggle" id="f_mon"><span class="switch"></span><span id="f_mon_txt">开启</span></div></div>
-        <div class="field" style="flex:0 0 160px"><label>刷新频率（秒）</label>
+        <div class="field" style="flex:0 0 160px"><label>抓取频率（秒）</label>
           <input type="number" id="f_int" min="5" value="60"></div>
         <div class="field" style="flex:0 0 160px"><label>展示条数</label>
           <input type="number" id="f_cnt" min="1" value="30"></div>
@@ -166,6 +196,7 @@
 
     bar.addEventListener('click', ()=>{ body.style.display = (body.style.display==='none'?'block':'none'); });
     body.style.display = 'none';
+
     let monOn = true;
     const monEl = body.querySelector('#f_mon');
     const monTxt = body.querySelector('#f_mon_txt');
@@ -176,19 +207,14 @@
     body.querySelector('#refresh').addEventListener('click', refresh);
 
     // 帖子列表卡片
-    const pc = el('div','card'); pc.appendChild(el('h2',null,'📜 大佬最近发言'));
+    const pc = el('div','card'); pc.appendChild(el('h2',null,'📜 大佬最近发言（当前快照）'));
     const list = el('div'); list.id='list'; pc.appendChild(list);
     app.appendChild(pc);
 
     loadCfg();
     refresh();
-    setInterval(refresh, 10000);
-  }
-
-  async function api(path, opts){
-    const r = await fetch(BACKEND + path, Object.assign({headers:{'Content-Type':'application/json'}}, opts||{}));
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    return r.json();
+    // 注意：页面不自动轮询。只在打开/手动「立即刷新」时拉取一次当前最近 30 条；
+    // 新发言的实时检测与企微推送完全由后端脚本负责。
   }
 
   async function loadCfg(){
@@ -217,7 +243,8 @@
     };
     try{
       await api('/api/config', {method:'POST', body:JSON.stringify(payload)});
-      toast('配置已保存，正在重新抓取…');
+      toast('配置已保存，后台正在重新抓取…');
+      refresh();
     }catch(e){ toast('保存失败：'+e.message); }
   }
 
@@ -232,6 +259,7 @@
     }catch(e){ toast('测试失败：'+e.message); }
   }
 
+  // 手动拉取一次最新快照（不自动轮询）
   async function refresh(){
     try{
       const data = await api('/api/posts');
@@ -248,9 +276,11 @@
       const status = document.getElementById('status');
       if(status){
         const last = st.last_check? new Date(st.last_check*1000).toLocaleTimeString() : '—';
+        const upd = data.posts && data.posts[0] && data.posts[0].time ? data.posts[0].time : '—';
         status.innerHTML = `<span>监控：<b style="color:${st.monitor_enabled?'var(--green)':'var(--amber)'}">${st.monitor_enabled?'开启':'关闭'}</b></span>`+
-          `<span>最近检查：${last}</span>`+
+          `<span>后端最近检查：${last}</span>`+
           `<span>缓存：${st.cached} 条</span>`+
+          `<span>页面快照时间：${upd}</span>`+
           `<span>Cookie：${st.has_cookie?'已填':'未填'}</span>`;
       }
       renderPosts(data.posts||[]);
@@ -280,11 +310,9 @@
     });
   }
 
-  function escapeHtml(s){ return (s||'').replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
-
-  // ============ 模式二：以 file:// 打开（显示启动指引） ============
+  // ============ 启动指引（后端未运行时，仍在本页内显示，不另开窗口） ============
   function renderGuide(){
-    const port = new URLSearchParams(location.search).get('port') || DEFAULT_PORT;
+    const port = portParam;
     const isWin = /Win/.test(navigator.platform) || /Windows/.test(navigator.userAgent);
     const href = decodeURIComponent(location.href);
     const idx = href.indexOf('/pages/');
@@ -298,8 +326,9 @@
 
     app.innerHTML = '';
     const h1 = el('h1'); h1.appendChild(el('span','dot off')); h1.appendChild(el('span',null,'NGA 大佬监控'));
+    h1.appendChild(el('span','pill', '全天候运行 · 24h'));
     app.appendChild(h1);
-    app.appendChild(el('div','sub','该功能需要一个本地后端来读取 NGA 并推送企业微信。'));
+    app.appendChild(el('div','sub','监控后端尚未启动。本页会持续探测，启动后自动切换为控制台（无需另开窗口）。'));
 
     const card = el('div','card guide');
     card.appendChild(el('h2',null,'🚀 启动后端（只需一次）'));
@@ -308,10 +337,9 @@
     const btns = el('div','btns');
     const copy = el('button',null,'复制启动命令');
     copy.addEventListener('click', ()=>copyText(cmd));
-    const open = el('a',''); open.textContent='打开监控页面 →'; open.href='http://localhost:'+port+'/';
-    open.target='_blank'; open.rel='noopener';
-    open.style.cssText='display:inline-block;background:transparent;border:1px solid var(--line);color:var(--text);padding:10px 16px;border-radius:10px;font-size:13px;text-decoration:none';
-    btns.appendChild(copy); btns.appendChild(open);
+    const reconn = el('button','ghost',null,'重新连接');
+    reconn.addEventListener('click', ()=>{ toast('正在重新连接…'); boot(); });
+    btns.appendChild(copy); btns.appendChild(reconn);
     card.appendChild(btns);
     app.appendChild(card);
 
@@ -319,43 +347,14 @@
     tip.innerHTML = '<h2>📌 使用前准备</h2>'+
       '<div class="hint">1. 本机需安装 <code>Python 3</code>（见仓库 README 第 0 步）。<br>'+
       '2. 启动后页面会要求填写 <code>NGA 登录 Cookie</code>（浏览器登录 NGA 后从开发者工具复制）。<br>'+
-      '3. 之后在页面内配置 帖子ID / 作者ID / 刷新频率 / 展示条数 即可。</div>';
+      '3. 之后在页面内配置 帖子ID / 作者ID / 抓取频率 / 展示条数 即可。<br>'+
+      '4. 监控 24 小时不间断，新发言由后端脚本推送企业微信；本页只展示当前最近发言快照（不自动刷新，点「重新连接」或刷新浏览器即可更新）。</div>';
     app.appendChild(tip);
 
-    detectBackend(port);
+    // 注：本页不自动轮询。后端启动后，点击「重新连接」按钮或刷新浏览器即可切换为控制台。
   }
 
-  async function detectBackend(port){
-    try{
-      const r = await fetch('http://localhost:'+port+'/api/status', {mode:'cors'});
-      if(r.ok){
-        // 后端已运行 → 直接内嵌完整页面
-        app.innerHTML = '';
-        const frame = document.createElement('iframe');
-        frame.src = 'http://localhost:'+port+'/';
-        frame.style.cssText='width:100%;height:90vh;border:0';
-        app.appendChild(frame);
-      }
-    }catch(e){ /* 后端未运行，保持指引 */ }
-  }
-
-  function copyText(t){
-    if(navigator.clipboard && navigator.clipboard.writeText){
-      navigator.clipboard.writeText(t).then(()=>toast('已复制命令')).catch(()=>fallbackCopy(t));
-    } else fallbackCopy(t);
-  }
-  function fallbackCopy(t){
-    const ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta);
-    ta.select(); try{document.execCommand('copy'); toast('已复制命令');}catch(e){ toast('请手动复制'); }
-    document.body.removeChild(ta);
-  }
-
-  // ============ 入口 ============
-  if(isServer){
-    resolveBackend().then(function(b){ BACKEND = b; renderFull(); });
-  } else {
-    renderGuide();
-  }
+  boot();
 })();
 </script>
 </body>
