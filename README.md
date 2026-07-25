@@ -58,8 +58,11 @@ python -m http.server 8000
 ### 1. 安装依赖
 
 ```bash
-pip install -r monitor/requirements.txt
+python -m pip install -r monitor/requirements.txt
 ```
+
+> 若提示 `pip` 不是命令，请用上面 `python -m pip` 的写法（Windows 上 `pip` 常未加入 PATH）。
+> 想装到指定 Python，可设 `WB_PYTHON` 后执行：`"$env:WB_PYTHON" -m pip install -r monitor/requirements.txt`
 
 ### 2. 配置企业微信推送（可选）
 
