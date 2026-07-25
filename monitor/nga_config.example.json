@@ -1,0 +1,9 @@
+{
+  "tid": 47207407,
+  "authorids": [150058],
+  "monitor_enabled": true,
+  "refresh_interval": 60,
+  "display_count": 30,
+  "nga_cookie": "",
+  "port": 8765
+}

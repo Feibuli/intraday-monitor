@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NGA 大佬监控</title>
+<style>
+ :root{
+   --bg:#06101c; --bg2:#0a1626; --line:rgba(125,154,211,0.18); --line-strong:rgba(125,154,211,0.32);
+   --text:#e8f1ff; --muted:#90a7cf;
+   --blue:#5fa8ff; --cyan:#39d9ff; --green:#2bd67b; --amber:#ffb85c; --red:#ff6b6b;
+ }
+ *{box-sizing:border-box}
+ html,body{margin:0;height:100%}
+ body{
+   color:var(--text);
+   font-family:"Inter","PingFang SC","Microsoft YaHei",sans-serif;
+   background:linear-gradient(180deg,#06101c 0%,#08111f 44%,#091522 100%);
+   min-height:100vh; padding:18px;
+ }
+ .wrap{max-width:960px;margin:0 auto}
+ h1{font-size:20px;margin:0 0 4px;display:flex;align-items:center;gap:10px}
+ .sub{color:var(--muted);font-size:12px;margin-bottom:14px}
+ .dot{width:9px;height:9px;border-radius:50%;background:var(--muted);box-shadow:0 0 8px currentColor}
+ .dot.on{background:var(--green);color:var(--green)}
+ .dot.off{background:var(--amber);color:var(--amber)}
+
+ .card{background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+ .card h2{font-size:14px;margin:0 0 12px;color:var(--cyan);letter-spacing:.04em}
+
+ .banner{display:none;background:rgba(255,107,107,0.12);border:1px solid rgba(255,107,107,0.4);
+   color:#ffb4b4;border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.6}
+ .banner.show{display:block}
+
+ .row{display:flex;flex-wrap:wrap;gap:14px}
+ .field{flex:1;min-width:220px;margin-bottom:12px}
+ .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+ input[type=text],input[type=number],textarea,input[type=password]{
+   width:100%;background:#06101c;border:1px solid var(--line);border-radius:10px;
+   color:var(--text);padding:9px 11px;font-size:13px;font-family:inherit;outline:none;
+ }
+ input:focus,textarea:focus{border-color:var(--blue)}
+ textarea{resize:vertical;min-height:64px;line-height:1.5}
+ .hint{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.5}
+ .hint code{background:#06101c;padding:1px 5px;border-radius:5px;color:var(--cyan)}
+
+ .toggle{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
+ .switch{width:42px;height:24px;border-radius:13px;background:#23314a;position:relative;transition:.2s}
+ .switch::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#7e93b8;transition:.2s}
+ .toggle.on .switch{background:rgba(43,214,123,0.4)}
+ .toggle.on .switch::after{left:21px;background:var(--green)}
+
+ .btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px}
+ button{
+   background:linear-gradient(135deg,var(--blue),var(--cyan));color:#04121f;border:0;
+   padding:10px 16px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;
+ }
+ button.ghost{background:transparent;border:1px solid var(--line);color:var(--text)}
+ button:active{transform:translateY(1px)}
+
+ .post{border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px;background:#06101c}
+ .post .meta{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:var(--muted);margin-bottom:6px;flex-wrap:wrap}
+ .post .author{color:var(--cyan);font-weight:600}
+ .post .body{font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word;color:var(--text)}
+ .post a{color:var(--blue);text-decoration:none;font-size:12px}
+ .post a:hover{text-decoration:underline}
+ .empty{color:var(--muted);font-size:13px;text-align:center;padding:30px 0}
+ .statusline{font-size:12px;color:var(--muted);margin-bottom:10px;display:flex;gap:16px;flex-wrap:wrap}
+ .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#0a1626;border:1px solid var(--line-strong);
+   color:var(--text);padding:10px 18px;border-radius:10px;font-size:13px;opacity:0;transition:.25s;pointer-events:none}
+ .toast.show{opacity:1}
+ details summary{cursor:pointer;color:var(--blue);font-size:12px;margin-top:6px}
+ details[open] summary{margin-bottom:8px}
+ .cfgbar{display:flex;justify-content:space-between;align-items:center;cursor:pointer}
+ .guide code{display:block;background:#06101c;border:1px solid var(--line);border-radius:10px;padding:11px 13px;
+   color:var(--cyan);font-size:13px;margin:8px 0;word-break:break-all;font-family:"SFMono-Regular",Consolas,monospace}
+</style>
+</head>
+<body>
+<div class="wrap" id="app">
+  <!-- 内容由 JS 根据运行模式注入 -->
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  const app = document.getElementById('app');
+  const toastEl = document.getElementById('toast');
+  const isServer = location.protocol === 'http:' || location.protocol === 'https:';
+  const DEFAULT_PORT = 8765;
+  const portParam = new URLSearchParams(location.search).get('port') || DEFAULT_PORT;
+  let BACKEND = '';   // '' 表示本页正由 NGA 后端托管（用相对路径）；否则指向本地后端地址
+
+  // 解析真正的 NGA 后端地址：先试相对路径（本页由后端托管），失败则指向本地 8765
+  async function resolveBackend(){
+    try{
+      const r = await fetch('/api/status', {mode:'cors'});
+      if(r.ok){
+        const j = await r.json();
+        if(j && ('monitor_enabled' in j)) return '';
+      }
+    }catch(e){ /* 不是后端托管 */ }
+    return 'http://localhost:' + portParam;
+  }
+
+  function toast(msg){
+    toastEl.textContent = msg; toastEl.classList.add('show');
+    clearTimeout(toast._t); toast._t = setTimeout(()=>toastEl.classList.remove('show'), 1800);
+  }
+  function el(tag, cls, txt){ const e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
+
+  // ============ 模式一：由后端 HTTP 服务提供（完整功能） ============
+  function renderFull(){
+    app.innerHTML = '';
+    const h1 = el('h1'); h1.appendChild(el('span','dot', '')); h1.appendChild(el('span',null,'NGA 大佬监控'));
+    app.appendChild(h1);
+    app.appendChild(el('div','sub','监控指定帖子下大佬的发言，新发言自动推送企业微信'));
+
+    const banner = el('div','banner'); banner.id='banner'; app.appendChild(banner);
+
+    // 状态行
+    const status = el('div','statusline'); status.id='status'; app.appendChild(status);
+
+    // 配置卡片
+    const cfg = el('div','card');
+    const bar = el('div','cfgbar');
+    bar.innerHTML = '<h2 style="margin:0">⚙️ 配置</h2>';
+    const toggle = el('span'); toggle.textContent='点击展开/收起 ▾'; toggle.style.color='var(--muted)'; toggle.style.fontSize='12px';
+    bar.appendChild(toggle);
+    cfg.appendChild(bar);
+    const body = el('div'); body.id='cfgbody'; body.style.marginTop='12px';
+    cfg.appendChild(body);
+    app.appendChild(cfg);
+
+    body.innerHTML = `
+      <div class="row">
+        <div class="field"><label>帖子 ID（tid，可逗号分隔多个）</label>
+          <input type="text" id="f_tid" placeholder="例如 47207407"></div>
+        <div class="field"><label>作者 ID（authorid，多个用逗号/空格分隔）</label>
+          <textarea id="f_aids" placeholder="例如 150058, 123456"></textarea></div>
+      </div>
+      <div class="row">
+        <div class="field" style="flex:0 0 200px"><label>监控推送</label>
+          <div class="toggle" id="f_mon"><span class="switch"></span><span id="f_mon_txt">开启</span></div></div>
+        <div class="field" style="flex:0 0 160px"><label>刷新频率（秒）</label>
+          <input type="number" id="f_int" min="5" value="60"></div>
+        <div class="field" style="flex:0 0 160px"><label>展示条数</label>
+          <input type="number" id="f_cnt" min="1" value="30"></div>
+      </div>
+      <div class="field"><label>NGA 登录 Cookie（必填，否则无法读取帖子）</label>
+        <input type="password" id="f_cookie" placeholder="ngaPassportUid=xxxx; ngaPassportCid=yyyy">
+        <div class="hint">
+          获取方式：浏览器登录 NGA → 打开目标帖子 → F12 开发者工具 → Network(网络) → 任意请求 →
+          复制 Request Headers 里的 <code>Cookie</code> 整行（含 <code>ngaPassportUid</code> 与 <code>ngaPassportCid</code>）。
+          仅存于本地 config，不会上传。
+        </div>
+        <details><summary>为什么必须要 Cookie？</summary>
+          <div class="hint">NGA 对未登录访问返回「权限不足」。带登录 Cookie 才能读取该帖下大佬的发言。Cookie 只在你本机使用。</div>
+        </details>
+      </div>
+      <div class="btns">
+        <button id="save">保存配置</button>
+        <button class="ghost" id="test">测试连接</button>
+        <button class="ghost" id="refresh">立即刷新</button>
+      </div>`;
+
+    bar.addEventListener('click', ()=>{ body.style.display = (body.style.display==='none'?'block':'none'); });
+    body.style.display = 'none';
+    let monOn = true;
+    const monEl = body.querySelector('#f_mon');
+    const monTxt = body.querySelector('#f_mon_txt');
+    monEl.addEventListener('click', ()=>{ monOn=!monOn; monEl.classList.toggle('on',monOn); monTxt.textContent=monOn?'开启':'关闭'; });
+
+    body.querySelector('#save').addEventListener('click', saveCfg);
+    body.querySelector('#test').addEventListener('click', testConn);
+    body.querySelector('#refresh').addEventListener('click', refresh);
+
+    // 帖子列表卡片
+    const pc = el('div','card'); pc.appendChild(el('h2',null,'📜 大佬最近发言'));
+    const list = el('div'); list.id='list'; pc.appendChild(list);
+    app.appendChild(pc);
+
+    loadCfg();
+    refresh();
+    setInterval(refresh, 10000);
+  }
+
+  async function api(path, opts){
+    const r = await fetch(BACKEND + path, Object.assign({headers:{'Content-Type':'application/json'}}, opts||{}));
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.json();
+  }
+
+  async function loadCfg(){
+    try{
+      const c = await api('/api/config');
+      document.getElementById('f_tid').value = Array.isArray(c.tid)?c.tid.join(','):(c.tid||'');
+      document.getElementById('f_aids').value = Array.isArray(c.authorids)?c.authorids.join(', '):(c.authorids||'');
+      document.getElementById('f_int').value = c.refresh_interval||60;
+      document.getElementById('f_cnt').value = c.display_count||30;
+      document.getElementById('f_cookie').value = c.nga_cookie||'';
+      const mon = c.monitor_enabled!==false;
+      document.getElementById('f_mon').classList.toggle('on', mon);
+      document.getElementById('f_mon_txt').textContent = mon?'开启':'关闭';
+    }catch(e){ /* ignore */ }
+  }
+
+  async function saveCfg(){
+    const monEl = document.getElementById('f_mon');
+    const payload = {
+      tid: document.getElementById('f_tid').value.trim(),
+      authorids: document.getElementById('f_aids').value.trim(),
+      monitor_enabled: monEl.classList.contains('on'),
+      refresh_interval: parseInt(document.getElementById('f_int').value)||60,
+      display_count: parseInt(document.getElementById('f_cnt').value)||30,
+      nga_cookie: document.getElementById('f_cookie').value.trim(),
+    };
+    try{
+      await api('/api/config', {method:'POST', body:JSON.stringify(payload)});
+      toast('配置已保存，正在重新抓取…');
+    }catch(e){ toast('保存失败：'+e.message); }
+  }
+
+  async function testConn(){
+    toast('正在测试连接…');
+    try{
+      const r = await api('/api/test');
+      const lines = (r.results||[]).map(x => x.error?`• tid=${x.tid} uid=${x.authorid} ❌ ${x.error}`:`• tid=${x.tid} uid=${x.authorid} ✅ ${x.count} 条`);
+      if(r.error) lines.push('错误：'+r.error);
+      if(!lines.length) lines.push('未配置任何 tid/authorid');
+      alert('连接测试结果：\n\n'+lines.join('\n'));
+    }catch(e){ toast('测试失败：'+e.message); }
+  }
+
+  async function refresh(){
+    try{
+      const data = await api('/api/posts');
+      const st = data.status||{};
+      const banner = document.getElementById('banner');
+      if(st.last_error){
+        banner.classList.add('show');
+        banner.innerHTML = '⚠️ '+escapeHtml(st.last_error) +
+          (st.has_cookie? '' : '<br>提示：请在「配置」中填写 NGA 登录 Cookie。');
+      } else { banner.classList.remove('show'); }
+
+      const dot = document.querySelector('h1 .dot');
+      if(dot){ dot.className = 'dot ' + (st.monitor_enabled?'on':'off'); }
+      const status = document.getElementById('status');
+      if(status){
+        const last = st.last_check? new Date(st.last_check*1000).toLocaleTimeString() : '—';
+        status.innerHTML = `<span>监控：<b style="color:${st.monitor_enabled?'var(--green)':'var(--amber)'}">${st.monitor_enabled?'开启':'关闭'}</b></span>`+
+          `<span>最近检查：${last}</span>`+
+          `<span>缓存：${st.cached} 条</span>`+
+          `<span>Cookie：${st.has_cookie?'已填':'未填'}</span>`;
+      }
+      renderPosts(data.posts||[]);
+    }catch(e){
+      const list = document.getElementById('list');
+      if(list) list.innerHTML = '<div class="empty">无法连接后端，请确认监控后端已启动。</div>';
+    }
+  }
+
+  function renderPosts(posts){
+    const list = document.getElementById('list');
+    list.innerHTML = '';
+    if(!posts.length){ list.innerHTML = '<div class="empty">暂无发言数据。请确认 Cookie 已填写且配置正确。</div>'; return; }
+    posts.forEach(p=>{
+      const card = el('div','post');
+      const meta = el('div','meta');
+      const left = el('span'); left.appendChild(el('span','author', p.author||('UID '+p.authorid)));
+      left.appendChild(document.createTextNode('  ·  UID '+p.authorid));
+      meta.appendChild(left);
+      meta.appendChild(el('span',null, p.time||''));
+      card.appendChild(meta);
+      const body = el('div','body'); body.textContent = p.content_text || p.content || '(无内容)';
+      card.appendChild(body);
+      const link = el('a',null,'在 NGA 查看 →'); link.href = p.url||'#'; link.target='_blank'; link.rel='noopener';
+      const foot = el('div'); foot.style.marginTop='6px'; foot.appendChild(link); card.appendChild(foot);
+      list.appendChild(card);
+    });
+  }
+
+  function escapeHtml(s){ return (s||'').replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+  // ============ 模式二：以 file:// 打开（显示启动指引） ============
+  function renderGuide(){
+    const port = new URLSearchParams(location.search).get('port') || DEFAULT_PORT;
+    const isWin = /Win/.test(navigator.platform) || /Windows/.test(navigator.userAgent);
+    const href = decodeURIComponent(location.href);
+    const idx = href.indexOf('/pages/');
+    const repoRoot = idx>=0 ? href.slice(0, idx) : href;
+    let fsPath = repoRoot.replace(/^file:\/\/\//, '');
+    if(isWin) fsPath = fsPath.replace(/\//g, '\\');
+    const monitorDir = fsPath + (isWin ? '\\monitor' : '/monitor');
+    const cmd = isWin
+      ? `cd /d "${monitorDir}" && python nga_monitor.py`
+      : `cd "${monitorDir}" && python3 nga_monitor.py`;
+
+    app.innerHTML = '';
+    const h1 = el('h1'); h1.appendChild(el('span','dot off')); h1.appendChild(el('span',null,'NGA 大佬监控'));
+    app.appendChild(h1);
+    app.appendChild(el('div','sub','该功能需要一个本地后端来读取 NGA 并推送企业微信。'));
+
+    const card = el('div','card guide');
+    card.appendChild(el('h2',null,'🚀 启动后端（只需一次）'));
+    card.appendChild(el('div','hint','复制下面命令，打开命令行（Windows 用 cmd，macOS/Linux 用终端）粘贴回车即可。脚本为纯标准库，无需 pip 安装任何依赖。'));
+    const code = el('code'); code.textContent = cmd; card.appendChild(code);
+    const btns = el('div','btns');
+    const copy = el('button',null,'复制启动命令');
+    copy.addEventListener('click', ()=>copyText(cmd));
+    const open = el('a',''); open.textContent='打开监控页面 →'; open.href='http://localhost:'+port+'/';
+    open.target='_blank'; open.rel='noopener';
+    open.style.cssText='display:inline-block;background:transparent;border:1px solid var(--line);color:var(--text);padding:10px 16px;border-radius:10px;font-size:13px;text-decoration:none';
+    btns.appendChild(copy); btns.appendChild(open);
+    card.appendChild(btns);
+    app.appendChild(card);
+
+    const tip = el('div','card');
+    tip.innerHTML = '<h2>📌 使用前准备</h2>'+
+      '<div class="hint">1. 本机需安装 <code>Python 3</code>（见仓库 README 第 0 步）。<br>'+
+      '2. 启动后页面会要求填写 <code>NGA 登录 Cookie</code>（浏览器登录 NGA 后从开发者工具复制）。<br>'+
+      '3. 之后在页面内配置 帖子ID / 作者ID / 刷新频率 / 展示条数 即可。</div>';
+    app.appendChild(tip);
+
+    detectBackend(port);
+  }
+
+  async function detectBackend(port){
+    try{
+      const r = await fetch('http://localhost:'+port+'/api/status', {mode:'cors'});
+      if(r.ok){
+        // 后端已运行 → 直接内嵌完整页面
+        app.innerHTML = '';
+        const frame = document.createElement('iframe');
+        frame.src = 'http://localhost:'+port+'/';
+        frame.style.cssText='width:100%;height:90vh;border:0';
+        app.appendChild(frame);
+      }
+    }catch(e){ /* 后端未运行，保持指引 */ }
+  }
+
+  function copyText(t){
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(t).then(()=>toast('已复制命令')).catch(()=>fallbackCopy(t));
+    } else fallbackCopy(t);
+  }
+  function fallbackCopy(t){
+    const ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta);
+    ta.select(); try{document.execCommand('copy'); toast('已复制命令');}catch(e){ toast('请手动复制'); }
+    document.body.removeChild(ta);
+  }
+
+  // ============ 入口 ============
+  if(isServer){
+    resolveBackend().then(function(b){ BACKEND = b; renderFull(); });
+  } else {
+    renderGuide();
+  }
+})();
+</script>
+</body>
+</html>

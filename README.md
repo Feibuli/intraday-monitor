@@ -16,13 +16,16 @@ intraday-monitor/
 ├── config.js                       # 页面导航配置（指向 pages/ 下看板）
 ├── pages/
 │   ├── sector_flow_dashboard.html  # 板块资金流看板
-│   └── bull_calc.html              # 牛股计算器看板
+│   ├── bull_calc.html              # 牛股计算器看板
+│   └── nga_monitor.html            # NGA 大佬监控看板（需后端，见下）
 ├── monitor/                        # 可选：Python 监控后端
 │   ├── stock_monitor.py            # 监控主程序（突破告警 + 企业微信推送）
+│   ├── nga_monitor.py             # NGA 大佬监控后端（抓取 + 推送 + 内置页面服务）
 │   ├── start_monitor.ps1           # Windows 启动器（注册交易日 9:15 唤醒任务）
 │   └── start_monitor.sh            # macOS / Linux 启动器
 │   ├── requirements.txt            # Python 依赖
 │   ├── .env.example                # 企业微信 Webhook 配置模板
+│   ├── nga_config.example.json     # NGA 监控配置模板
 │   └── watchlist.example.csv       # 自选股列表模板
 ├── .gitignore
 ├── LICENSE                         # MIT
@@ -138,6 +141,51 @@ cd monitor && python stock_monitor.py        # 或 python3 stock_monitor.py
 
 ---
 
+## NGA 大佬监控（第三个页面）
+
+监控某个 NGA 帖子下、指定作者（一个或多个）的发言，一旦有新发言立即推送企业微信，并在页面内展示大佬最近发言。
+
+> 核心关系：**一个帖子 ID（tid）可对应多个作者 ID（authorid）**。配置时填入 tid 与一组 authorid，后端会对每个 (tid, authorid) 组合抓取并聚合。
+
+### 为什么需要 NGA 登录 Cookie？
+
+NGA 对未登录（游客）访问 `read.php` 会返回「权限不足」（error 15）。要读取该帖下大佬的发言，**必须在配置中填入你浏览器登录后的 NGA Cookie**（含 `ngaPassportUid` 与 `ngaPassportCid`）。Cookie 仅存于本地 `monitor/nga_config.json`，**已被 `.gitignore` 忽略，绝不入库、不上传**。
+
+获取方式：浏览器登录 NGA → 打开目标帖子 → F12 开发者工具 → Network（网络）→ 任意请求 → 复制 Request Headers 里的 `Cookie` 整行。
+
+### 启动（小白流程）
+
+NGA 监控自带一个本地后端（既是抓取器，也是页面服务器），所以流程与「启动监控」一致：
+
+1. 打开看板，进入左侧 **NGA大佬监控** 页面；
+2. 若后端未启动，页面会显示「启动指引」并给出复制命令（已按系统自动区分 Windows / macOS·Linux）；
+3. 打开命令行，粘贴命令回车运行：
+   ```bash
+   # Windows
+   cd /d "仓库路径\monitor" && python nga_monitor.py
+   # macOS / Linux
+   cd "仓库路径/monitor" && python3 nga_monitor.py
+   ```
+4. 后端启动后，点击页面里的「打开监控页面」（默认 http://localhost:8765/ ），或直接刷新 NGA 标签页即可看到实时面板；
+5. 在面板「配置」中填写：**帖子ID / 作者ID / 监控开关 / 刷新频率(默认60秒) / 展示条数(默认30条) / NGA Cookie**，点「保存配置」。
+
+> 脚本 `nga_monitor.py` 同样**仅用 Python 标准库**，无需 pip 安装任何依赖。
+> 点「测试连接」可立即验证 Cookie 与配置是否正确（不推送）。
+
+### 功能说明
+
+- **监控**：开启监控后，大佬在指定帖子的新发言会推送企业微信（markdown 消息，含作者/时间/内容摘要/链接）。启动与变更配置时会先静默播种历史，避免刷屏。
+- **配置**：tid、authorid（多个用逗号/空格分隔）、监控开关、刷新频率、展示条数、NGA Cookie，全部页面内可改，实时生效。
+- **展示**：页面按时间倒序展示大佬最近发言，每 10 秒自动刷新。
+
+### 调试
+
+- `python nga_monitor.py --test`：只抓取一次并打印结果（不启动服务、不推送），用于验证 Cookie 是否有效。
+- 抓取但解析异常时，原始响会写入 `monitor/nga_debug_last.txt`（gitignored）便于排查。
+- 企业微信 Webhook 复用 `monitor/.env` 的 `WECHAT_WEBHOOK_URL`（与股价监控同一机器人）。
+
+---
+
 ## 数据来源
 
 - 板块资金流：`push2delay.eastmoney.com`（东方财富公开行情接口）
@@ -151,6 +199,7 @@ cd monitor && python stock_monitor.py        # 或 python3 stock_monitor.py
 
 - 企业微信 Webhook 地址通过环境变量 `WECHAT_WEBHOOK_URL` 读取，配置在 `monitor/.env`（已被忽略），**绝不硬编码入库**。
 - 自选股 `monitor/watchlist.csv` 含个人数据，已被 `.gitignore` 忽略。
+- NGA 登录 Cookie 配置在 `monitor/nga_config.json`（已被忽略），仅本机读取用于抓取，**绝不入库、不上传**。
 - 所有脚本与看板均为本地运行，不存在远端收集。
 
 ---
