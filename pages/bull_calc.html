@@ -1248,9 +1248,17 @@
 
             // ── 启动监控 ──
             const launchMonitor = () => {
-                const psUrl = new URL('../monitor/start_monitor.ps1', location.href);
-                let psPath = decodeURIComponent(psUrl.pathname);
-                if (psPath.startsWith('/') && /^[A-Za-z]:/.test(psPath.slice(1))) psPath = psPath.slice(1);
+                // 把 file:// URL 还原成文件系统路径，避免浏览器对 file: 协议 pathname 的百分号编码差异（如 Iron%20Box）
+                const fileUrlToFsPath = (url) => {
+                    let p = decodeURIComponent(url);
+                    p = p.replace(/^file:\/\//i, '');
+                    if (p.startsWith('/') && /^[A-Za-z]:/.test(p.slice(1))) p = p.slice(1);
+                    return p.replace(/[\\/]+$/, '');
+                };
+                const here = fileUrlToFsPath(location.href);            // .../intraday-monitor/pages/bull_calc.html
+                const pagesDir = here.replace(/[\\/][^\\/]*$/, '');       // .../intraday-monitor/pages
+                const repoDir = pagesDir.replace(/[\\/][^\\/]*$/, '');   // .../intraday-monitor
+                const psPath = repoDir + '/monitor/start_monitor.ps1';   // 回退到仓库根再进 monitor/
                 const cmd = `powershell -ExecutionPolicy Bypass -File "${psPath}"`;
                 navigator.clipboard.writeText(cmd).then(() => {
                     ElMessage({
