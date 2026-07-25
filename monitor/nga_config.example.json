@@ -4,7 +4,7 @@
   "monitor_enabled": true,
   "refresh_interval": 60,
   "display_count": 30,
-  "nga_uid": "你的NGA登录UID",
-  "nga_cid": "你的NGA登录CID",
+  "nga_uid": "你的NGA登录UID_ngaPassportUid",
+  "nga_cid": "你的NGA登录CID_ngaPassportCid",
   "port": 8765
 }

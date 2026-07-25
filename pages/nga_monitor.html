@@ -32,30 +32,14 @@
    color:#ffb4b4;border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.6}
  .banner.show{display:block}
 
- .row{display:flex;flex-wrap:wrap;gap:14px}
- .field{flex:1;min-width:220px;margin-bottom:12px}
- .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
- input[type=text],input[type=number],textarea{
-   width:100%;background:#06101c;border:1px solid var(--line);border-radius:10px;
-   color:var(--text);padding:9px 11px;font-size:13px;font-family:inherit;outline:none;
- }
- input:focus,textarea:focus{border-color:var(--blue)}
- textarea{resize:vertical;min-height:60px;line-height:1.5}
- .hint{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.5}
+ .hint{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.6}
  .hint code{background:#06101c;padding:1px 5px;border-radius:5px;color:var(--cyan)}
 
- .toggle{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
- .switch{width:42px;height:24px;border-radius:13px;background:#23314a;position:relative;transition:.2s}
- .switch::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#7e93b8;transition:.2s}
- .toggle.on .switch{background:rgba(43,214,123,0.4)}
- .toggle.on .switch::after{left:21px;background:var(--green)}
-
- .btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px}
+ .bar{display:flex;gap:10px;margin-bottom:12px}
  button{
    background:linear-gradient(135deg,var(--blue),var(--cyan));color:#04121f;border:0;
-   padding:10px 16px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;
+   padding:9px 15px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;
  }
- button.ghost{background:transparent;border:1px solid var(--line);color:var(--text)}
  button:active{transform:translateY(1px)}
 
  .post{border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px;background:#06101c}
@@ -65,13 +49,11 @@
  .post a{color:var(--blue);text-decoration:none;font-size:12px}
  .post a:hover{text-decoration:underline}
  .empty{color:var(--muted);font-size:13px;text-align:center;padding:30px 0}
- .statusline{font-size:12px;color:var(--muted);margin-bottom:10px;display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+ .statusline{font-size:12px;color:var(--muted);margin-bottom:12px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}
  .statusline b{color:var(--text)}
  .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#0a1626;border:1px solid var(--line-strong);
    color:var(--text);padding:10px 18px;border-radius:10px;font-size:13px;opacity:0;transition:.25s;pointer-events:none;max-width:90vw}
  .toast.show{opacity:1}
- details summary{cursor:pointer;color:var(--blue);font-size:12px;margin-top:6px}
- details[open] summary{margin-bottom:8px}
  .start code{display:block;background:#06101c;border:1px solid var(--line);border-radius:10px;padding:11px 13px;
    color:var(--cyan);font-size:13px;margin:8px 0;word-break:break-all;font-family:"SFMono-Regular",Consolas,monospace}
  .pill{display:inline-block;font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:20px;padding:2px 9px;margin-left:8px}
@@ -79,7 +61,7 @@
 </head>
 <body>
 <div class="wrap" id="app">
-  <!-- 单页：启动 + 配置 + 展示，不另开窗口 -->
+  <!-- 纯展示页：监控/推送由后端执行，本页只显示大佬最近发言 -->
 </div>
 <div class="toast" id="toast"></div>
 
@@ -91,9 +73,8 @@
   const portParam = new URLSearchParams(location.search).get('port') || DEFAULT_PORT;
   let BACKEND = '';
   let ONLINE = false;
-  let monOn = true;
-  const LS_KEY = 'nga_cfg_cache_v1';
 
+  // 后端地址解析：优先同源（被后端直接托管），否则指向本地端口
   async function resolveBackend(){
     try{
       const r = await fetch('/api/status', {mode:'cors'});
@@ -114,19 +95,20 @@
   }
   function el(tag, cls, txt){ const e=document.createElement(tag); if(cls)e.className=cls; if(txt!=null)e.textContent=txt; return e; }
   function escapeHtml(s){ return (s||'').replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+  function fmt(ts){ return ts ? new Date(ts*1000).toLocaleString() : '—'; }
 
   function copyText(t){
     if(navigator.clipboard && navigator.clipboard.writeText){
-      navigator.clipboard.writeText(t).then(()=>toast('已复制命令')).catch(()=>fallbackCopy(t));
+      navigator.clipboard.writeText(t).then(()=>toast('已复制启动命令')).catch(()=>fallbackCopy(t));
     } else fallbackCopy(t);
   }
   function fallbackCopy(t){
     const ta=document.createElement('textarea'); ta.value=t; document.body.appendChild(ta);
-    ta.select(); try{document.execCommand('copy'); toast('已复制命令');}catch(e){ toast('请手动复制'); }
+    ta.select(); try{document.execCommand('copy'); toast('已复制启动命令');}catch(e){ toast('请手动复制'); }
     document.body.removeChild(ta);
   }
 
-  // 由 file:// 页面推导启动命令（参考牛股计算器）
+  // 由 file:// 页面推导启动命令（复制后 cmd / PowerShell 通用，无需 cd、无 &&）
   function buildStartCmd(){
     if(!/^file:/i.test(location.protocol)) return null;
     let p = decodeURIComponent(location.href);
@@ -136,211 +118,79 @@
     const pagesDir = p.replace(/[\\/][^\\/]*$/, '');
     const repoDir = pagesDir.replace(/[\\/][^\\/]*$/, '');
     const isWin = /Win/i.test(navigator.platform) || /Windows/i.test(navigator.userAgent);
-    const monitorDir = repoDir + (isWin ? '\\monitor' : '/monitor');
-    return isWin ? `cd /d "${monitorDir}" && python nga_monitor.py`
-                 : `cd "${monitorDir}" && python3 nga_monitor.py`;
+    const scriptPath = repoDir + (isWin ? '\\monitor\\nga_monitor.py' : '/monitor/nga_monitor.py');
+    return isWin ? `python "${scriptPath}"` : `python3 "${scriptPath}"`;
   }
 
-  // ============ 入口 ============
-  async function boot(){
-    render();
-    connect();
-  }
-
-  async function connect(){
-    BACKEND = await resolveBackend();
-    try{
-      await api('/api/status');
-      ONLINE = true;
-      setDot(true);
-      document.getElementById('start_title').textContent = '✅ 监控后端运行中';
-      await loadCfg();
-      await syncLocalToBackendIfNeeded();
-      await refresh();
-    }catch(e){
-      ONLINE = false;
-      setDot(false);
-      document.getElementById('start_title').textContent = '🚀 启动监控';
-      const status = document.getElementById('status');
-      if(status) status.innerHTML = '<span style="color:var(--amber)">● 后端未连接</span><span>请点上方「启动监控」复制命令并运行</span>';
-    }
-  }
-
-  function setDot(on){ const d=document.getElementById('dot'); if(d) d.className='dot '+(on?'on':'off'); }
-
-  // ============ 渲染（始终：启动 + 配置 + 展示） ============
-  function render(){
+  // ============ 渲染骨架 ============
+  function renderSkeleton(){
     app.innerHTML = '';
     const h1 = el('h1');
     h1.appendChild(el('span','dot off')); h1.firstChild.id='dot';
     h1.appendChild(el('span',null,'NGA 大佬监控'));
     h1.appendChild(el('span','pill', '全天候运行 · 24h'));
     app.appendChild(h1);
-    app.appendChild(el('div','sub','监控指定帖子下大佬的发言，新发言自动推送企业微信（页面仅展示快照，推送由后端 24h 执行）'));
-
+    app.appendChild(el('div','sub','大佬最近发言实时展示 —— 抓取、检测与企微推送均由后端 24 小时运行，本页只负责查看。'));
     const banner = el('div','banner'); banner.id='banner'; app.appendChild(banner);
     const status = el('div','statusline'); status.id='status'; app.appendChild(status);
 
-    // —— 启动卡（始终显示，唯一的「启动监控」按钮）——
-    const sc = el('div','card start'); sc.id='startcard';
-    const sct = el('h2'); sct.id='start_title'; sct.textContent='🚀 启动监控'; sc.appendChild(sct);
-    sc.appendChild(el('div','hint','点击下方「启动监控」会自动保存配置并复制启动命令；打开命令行（cmd / 终端）粘贴回车即可。脚本纯标准库，无需 pip 安装任何依赖。'));
-    const code = el('code'); code.id='cmd';
-    const cmd = buildStartCmd();
-    code.textContent = cmd || 'cd "你的项目目录/monitor" && python nga_monitor.py';
-    sc.appendChild(code);
-    const sbtns = el('div','btns');
-    const launch = el('button',null,'🚀 启动监控');
-    launch.addEventListener('click', launchMonitor);
-    sbtns.appendChild(launch);
-    sc.appendChild(sbtns);
-    app.appendChild(sc);
+    const bar = el('div','bar'); bar.id='bar';
+    const refreshBtn = el('button',null,'🔄 立即刷新');
+    refreshBtn.addEventListener('click', refresh);
+    bar.appendChild(refreshBtn);
+    app.appendChild(bar);
 
-    // —— 配置卡（始终显示）——
-    const cfg = el('div','card');
-    cfg.appendChild(el('h2',null,'⚙️ 配置（帖子ID / 作者ID / 频率 / 条数 / NGA登录ID）'));
-    const body = el('div'); body.id='cfgbody'; body.style.marginTop='6px';
-    cfg.appendChild(body);
-    app.appendChild(cfg);
-
-    body.innerHTML = `
-      <div class="row">
-        <div class="field"><label>帖子 ID（tid，多个用逗号/空格分隔）</label>
-          <input type="text" id="f_tid" placeholder="例如 47207407, 47207408"></div>
-        <div class="field"><label>作者 ID（authorid，多个用逗号/空格分隔）</label>
-          <textarea id="f_aids" placeholder="例如 150058, 123456"></textarea></div>
-      </div>
-      <div class="row">
-        <div class="field" style="flex:0 0 200px"><label>监控推送</label>
-          <div class="toggle on" id="f_mon"><span class="switch"></span><span id="f_mon_txt">开启</span></div></div>
-        <div class="field" style="flex:0 0 160px"><label>抓取频率（秒）</label>
-          <input type="number" id="f_int" min="5" value="60"></div>
-        <div class="field" style="flex:0 0 160px"><label>展示条数</label>
-          <input type="number" id="f_cnt" min="1" value="30"></div>
-      </div>
-      <div class="row">
-        <div class="field" style="flex:1 1 240px"><label>NGA UID（ngaPassportUid）</label>
-          <input type="text" id="f_uid" placeholder="例如 16318439"></div>
-        <div class="field" style="flex:1 1 240px"><label> - NGA CID（ngaPassportCid）</label>
-          <input type="text" id="f_cid" placeholder="例如 a20f9901...aba7cc3"></div>
-      </div>
-      <div class="hint">
-        获取方式：浏览器登录 NGA → F12 开发者工具 → Application(应用) → Cookies → 找到
-        <code>ngaPassportUid</code> 与 <code>ngaPassportCid</code> 两个值，分别填入上面两格。仅存于本地，不会上传。
-        <details><summary>为什么需要这两个 ID？</summary>
-          <div class="hint">NGA 对未登录访问返回「权限不足」。填入你的登录 UID 与 CID，后端即相当于带登录态读取该帖下大佬的发言。两者都只在本机使用。</div>
-        </details>
-      </div>
-      <div class="btns">
-        <button class="ghost" id="save">💾 保存配置</button>
-        <button class="ghost" id="refresh">🔄 立即刷新</button>
-      </div>`;
-
-    const monEl = body.querySelector('#f_mon');
-    const monTxt = body.querySelector('#f_mon_txt');
-    monEl.addEventListener('click', ()=>{ monOn=!monOn; monEl.classList.toggle('on',monOn); monTxt.textContent=monOn?'开启':'关闭'; });
-    body.querySelector('#save').addEventListener('click', saveCfg);
-    body.querySelector('#refresh').addEventListener('click', refresh);
-
-    // —— 展示卡（始终显示）——
-    const pc = el('div','card'); pc.appendChild(el('h2',null,'📜 大佬最近发言（当前快照）'));
-    const list = el('div'); list.id='list'; pc.appendChild(list);
-    list.innerHTML = '<div class="empty">尚未连接后端。点上方「启动监控」运行后端后，这里会显示大佬最近发言。</div>';
+    const pc = el('div','card');
+    pc.appendChild(el('h2',null,'📜 大佬最近发言'));
+    const list = el('div'); list.id='list';
+    list.innerHTML = '<div class="empty">正在连接监控后端…</div>';
+    pc.appendChild(list);
     app.appendChild(pc);
-
-    loadLocalCache();
   }
 
-  // ============ 配置存取（离线存浏览器，在线写后端） ============
-  function cacheLocal(cfg){
-    try{ localStorage.setItem(LS_KEY, JSON.stringify(cfg)); }catch(e){}
+  function setDot(on){ const d=document.getElementById('dot'); if(d) d.className='dot '+(on?'on':'off'); }
+
+  // 离线：显示启动指引卡（仅启动后端用，不含任何监控配置）
+  function renderOffline(){
+    if(document.getElementById('startcard')) return;
+    const sc = el('div','card start'); sc.id='startcard';
+    sc.appendChild(el('h2',null,'🚀 监控后端未运行'));
+    sc.appendChild(el('div','hint','本页只展示发言，监控与企微推送由后端脚本执行。请先启动后端：'));
+    const cmd = buildStartCmd() || 'python "你的项目路径/intraday-monitor/monitor/nga_monitor.py"';
+    const code = el('code'); code.textContent = cmd; sc.appendChild(code);
+    const btns = el('div','bar');
+    const copy = el('button',null,'📋 复制启动命令');
+    copy.addEventListener('click', ()=>copyText(cmd));
+    btns.appendChild(copy);
+    sc.appendChild(btns);
+    sc.appendChild(el('div','hint','监控目标（帖子ID / 作者ID）与 NGA 登录 ID 在 <code>monitor/nga_config.json</code> 中配置，修改后需重启脚本生效。'));
+    const bar = document.getElementById('bar');
+    app.insertBefore(sc, bar);
   }
-  function loadLocalCache(){
+
+  function removeOffline(){ const s=document.getElementById('startcard'); if(s) s.remove(); }
+
+  // ============ 连接 ============
+  async function connect(){
+    BACKEND = await resolveBackend();
     try{
-      const c = JSON.parse(localStorage.getItem(LS_KEY)||'null'); if(!c) return;
-      if(c.tid!=null) document.getElementById('f_tid').value = Array.isArray(c.tid)?c.tid.join(','):c.tid;
-      if(c.authorids!=null) document.getElementById('f_aids').value = Array.isArray(c.authorids)?c.authorids.join(', '):c.authorids;
-      if(c.nga_uid!=null) document.getElementById('f_uid').value = c.nga_uid;
-      if(c.nga_cid!=null) document.getElementById('f_cid').value = c.nga_cid;
-      if(c.refresh_interval) document.getElementById('f_int').value = c.refresh_interval;
-      if(c.display_count) document.getElementById('f_cnt').value = c.display_count;
-      if(c.monitor_enabled===false){ monOn=false; document.getElementById('f_mon').classList.remove('on'); document.getElementById('f_mon_txt').textContent='关闭'; }
-    }catch(e){}
-  }
-
-  async function loadCfg(){
-    try{
-      const c = await api('/api/config');
-      document.getElementById('f_tid').value = Array.isArray(c.tid)?c.tid.join(','):(c.tid||'');
-      document.getElementById('f_aids').value = Array.isArray(c.authorids)?c.authorids.join(', '):(c.authorids||'');
-      document.getElementById('f_uid').value = c.nga_uid||'';
-      document.getElementById('f_cid').value = c.nga_cid||'';
-      document.getElementById('f_int').value = c.refresh_interval||60;
-      document.getElementById('f_cnt').value = c.display_count||30;
-      monOn = c.monitor_enabled!==false;
-      const monEl = document.getElementById('f_mon');
-      monEl.classList.toggle('on', monOn);
-      document.getElementById('f_mon_txt').textContent = monOn?'开启':'关闭';
-      cacheLocal(c);
-    }catch(e){}
-  }
-
-  function readForm(){
-    return {
-      tid: document.getElementById('f_tid').value.trim(),
-      authorids: document.getElementById('f_aids').value.trim(),
-      nga_uid: document.getElementById('f_uid').value.trim(),
-      nga_cid: document.getElementById('f_cid').value.trim(),
-      monitor_enabled: document.getElementById('f_mon').classList.contains('on'),
-      refresh_interval: parseInt(document.getElementById('f_int').value)||60,
-      display_count: parseInt(document.getElementById('f_cnt').value)||30,
-    };
-  }
-
-  // 后端刚连上、但后端 uid/cid 为空而本地有值时，把本地配置同步到后端
-  async function syncLocalToBackendIfNeeded(){
-    try{
-      const c = JSON.parse(localStorage.getItem(LS_KEY)||'null'); if(!c || !c.nga_uid) return;
-      const cur = await api('/api/config');
-      if(cur && !cur.nga_uid){
-        await api('/api/config', {method:'POST', body:JSON.stringify(c)});
-      }
-    }catch(e){}
-  }
-
-  async function doSave(){
-    const payload = readForm();
-    cacheLocal(payload);
-    if(ONLINE){
-      try{ await api('/api/config', {method:'POST', body:JSON.stringify(payload)}); return true; }
-      catch(e){ return false; }
+      await api('/api/status');
+      ONLINE = true;
+      setDot(true);
+      removeOffline();
+      refresh();
+    }catch(e){
+      ONLINE = false;
+      setDot(false);
+      renderOffline();
     }
-    return false;
   }
 
-  async function saveCfg(){
-    const ok = await doSave();
-    if(ok){ toast('配置已保存，后台正在重新抓取…'); refresh(); }
-    else toast('已存到本地浏览器，启动后端后点「启动监控」会自动同步');
-  }
-
-  // 「启动监控」：保存配置 + 复制启动命令（唯一的启动动作）
-  async function launchMonitor(){
-    const ok = await doSave();
-    const cmd = buildStartCmd() || 'cd "你的项目目录/monitor" && python nga_monitor.py';
-    copyText(cmd);
-    const isWin = /Win/i.test(navigator.platform) || /Windows/i.test(navigator.userAgent);
-    const tip = isWin
-      ? '配置已保存，启动命令已复制 ✅ 打开 cmd → 右键粘贴 → 回车即可运行监控'
-      : '配置已保存，启动命令已复制 ✅ 打开终端 → 粘贴 → 回车即可运行监控';
-    toast(ok ? tip : (tip + '（配置已暂存本地，后端启动后自动同步）'));
-  }
-
-  // ============ 展示（手动刷新，不自动轮询） ============
+  // ============ 展示（只读，不配置、不自动轮询） ============
   async function refresh(){
     if(!ONLINE){
-      const list = document.getElementById('list');
-      if(list) list.innerHTML = '<div class="empty">尚未连接后端。点上方「启动监控」运行后端后，这里会显示大佬最近发言。</div>';
+      const list=document.getElementById('list');
+      if(list) list.innerHTML='<div class="empty">尚未连接后端。请启动监控后端（见上方卡片）后点「立即刷新」。</div>';
       return;
     }
     try{
@@ -349,50 +199,56 @@
       const banner = document.getElementById('banner');
       if(st.last_error){
         banner.classList.add('show');
-        banner.innerHTML = '⚠️ '+escapeHtml(st.last_error) +
-          (st.has_cookie? '' : '<br>提示：请在上方「配置」中填写 NGA UID 与 CID。');
+        banner.innerHTML = '⚠️ '+escapeHtml(st.last_error);
       } else { banner.classList.remove('show'); }
 
-      const dot = document.getElementById('dot');
-      if(dot){ dot.className = 'dot ' + (st.monitor_enabled?'on':'off'); }
-      const status = document.getElementById('status');
+      setDot(st.monitor_enabled!==false);
+      const status=document.getElementById('status');
       if(status){
-        const last = st.last_check? new Date(st.last_check*1000).toLocaleTimeString() : '—';
-        const upd = data.posts && data.posts[0] && data.posts[0].time ? data.posts[0].time : '—';
-        status.innerHTML = `<span>监控：<b style="color:${st.monitor_enabled?'var(--green)':'var(--amber)'}">${st.monitor_enabled?'开启':'关闭'}</b></span>`+
-          `<span>后端最近检查：${last}</span>`+
+        const tids=(st.tids||[]).join(', ');
+        const aids=(st.authorids||[]).join(', ');
+        status.innerHTML =
+          `<span>监控目标：tid <b>${escapeHtml(tids)}</b> / 作者 <b>${escapeHtml(aids)}</b></span>`+
+          `<span>推送：<b style="color:${st.monitor_enabled!==false?'var(--green)':'var(--amber)'}">${st.monitor_enabled!==false?'开启':'关闭'}</b></span>`+
+          `<span>最近检查：${fmt(st.last_check)}</span>`+
+          `<span>上次推送：${fmt(st.last_push)}</span>`+
           `<span>缓存：${st.cached} 条</span>`+
-          `<span>页面快照时间：${upd}</span>`+
           `<span>NGA登录：${st.has_cookie?'已填':'未填'}</span>`;
       }
       renderPosts(data.posts||[]);
     }catch(e){
-      const list = document.getElementById('list');
-      if(list) list.innerHTML = '<div class="empty">无法连接后端，请确认监控后端已运行并点「启动监控」。</div>';
+      const list=document.getElementById('list');
+      if(list) list.innerHTML='<div class="empty">无法连接后端，请确认监控后端已运行（见上方启动指引）。</div>';
     }
   }
 
   function renderPosts(posts){
-    const list = document.getElementById('list');
-    list.innerHTML = '';
-    if(!posts.length){ list.innerHTML = '<div class="empty">暂无发言数据。请确认 NGA UID/CID 已填写且配置正确，然后点「立即刷新」。</div>'; return; }
+    const list=document.getElementById('list'); list.innerHTML='';
+    if(!posts.length){
+      list.innerHTML='<div class="empty">暂无发言数据。请确认 NGA 登录 ID 已配置、监控目标正确，然后点「立即刷新」。</div>';
+      return;
+    }
     posts.forEach(p=>{
       const card = el('div','post');
       const meta = el('div','meta');
-      const left = el('span'); left.appendChild(el('span','author', p.author||('UID '+p.authorid)));
+      const left = el('span');
+      left.appendChild(el('span','author', p.author||('UID '+p.authorid)));
       left.appendChild(document.createTextNode('  ·  UID '+p.authorid+'  ·  tid '+p.tid));
       meta.appendChild(left);
       meta.appendChild(el('span',null, p.time||''));
       card.appendChild(meta);
       const body = el('div','body'); body.textContent = p.content_text || p.content || '(无内容)';
       card.appendChild(body);
+      const foot = el('div'); foot.style.marginTop='6px';
       const link = el('a',null,'在 NGA 查看 →'); link.href = p.url||'#'; link.target='_blank'; link.rel='noopener';
-      const foot = el('div'); foot.style.marginTop='6px'; foot.appendChild(link); card.appendChild(foot);
+      foot.appendChild(link);
+      card.appendChild(foot);
       list.appendChild(card);
     });
   }
 
-  boot();
+  renderSkeleton();
+  connect();
 })();
 </script>
 </body>

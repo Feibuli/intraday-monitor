@@ -381,6 +381,7 @@ class NgaMonitor:
         self.last_error = ""
         self.last_check = 0
         self.last_success = 0
+        self.last_push = 0
         self.seeded = False
         self.running = True
 
@@ -480,6 +481,7 @@ class NgaMonitor:
                         print(f"[{datetime.now():%H:%M:%S}] 新发言 uid={p['authorid']} pid={p['pid']} -> 推送")
                         push_post(p)
                     self.seen_pids.update(p["pid"] for p in new_posts)
+                    self.last_push = time.time()
                     print(f"[{datetime.now():%H:%M:%S}] 本轮新增 {len(new_posts)} 条，已推送。")
         self.save_cache()
 
@@ -514,7 +516,10 @@ class NgaMonitor:
             time.sleep(interval)
 
     def update_config(self, new_cfg):
-        """应用前端提交的新配置，并触发一次静默重新播种（避免改配置时刷屏推送）。"""
+        """应用前端提交的新配置，并触发一次静默重新播种（避免改配置时刷屏推送）。
+
+        注意：监控与页面已解耦——此接口保留仅供脚本自身/调试使用，页面不调用。
+        """
         with self.lock:
             for k in ("tid", "authorids", "monitor_enabled", "refresh_interval",
                       "display_count", "nga_uid", "nga_cid", "port"):
@@ -524,37 +529,34 @@ class NgaMonitor:
             self.seeded = False  # 下一轮重新播种，不推送历史
         threading.Thread(target=self.check_once, daemon=True).start()
 
-    # ---------- HTTP 接口数据 ----------
-    def snapshot(self, include_cookie=False):
+    # ---------- HTTP 接口数据（只读，供页面展示用） ----------
+    def snapshot(self):
         with self.lock:
             cfg = dict(self.config)
             posts = list(self.posts)
             last_error = self.last_error
             last_check = self.last_check
             last_success = self.last_success
+            last_push = self.last_push
             monitor_enabled = cfg.get("monitor_enabled")
+            tids, aids = self._resolve_ids()
         display = int(cfg.get("display_count", 30))
         visible = posts[:display]
         out = {
             "status": {
                 "monitor_enabled": monitor_enabled,
+                "running": True,
                 "last_check": last_check,
                 "last_success": last_success,
+                "last_push": last_push,
                 "last_error": last_error,
                 "cached": len(posts),
                 "has_cookie": bool(cfg.get("nga_uid") and cfg.get("nga_cid")),
+                "tids": tids,
+                "authorids": aids,
+                "refresh_interval": int(cfg.get("refresh_interval", 60)),
+                "display_count": display,
                 "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            },
-            "config": {
-                "tid": cfg.get("tid"),
-                "authorids": cfg.get("authorids"),
-                "monitor_enabled": monitor_enabled,
-                "refresh_interval": cfg.get("refresh_interval"),
-                "display_count": cfg.get("display_count"),
-                "port": cfg.get("port"),
-                "nga_uid": cfg.get("nga_uid", ""),
-                "nga_cid": cfg.get("nga_cid", ""),
-                "has_cookie": bool(cfg.get("nga_uid") and cfg.get("nga_cid")),
             },
             "posts": visible,
         }
@@ -604,54 +606,11 @@ def make_handler(monitor):
             path = urllib.parse.urlparse(self.path).path
             if path in ("/", "/index.html"):
                 self._send_file(PAGE_PATH, "text/html; charset=utf-8")
-            elif path == "/api/config":
-                self._send_json(monitor.snapshot().get("config"))
             elif path == "/api/posts":
+                # 页面只读接口：返回 { status, posts }
                 self._send_json(monitor.snapshot())
             elif path == "/api/status":
                 self._send_json(monitor.snapshot().get("status"))
-            elif path == "/api/test":
-                self._handle_test()
-            else:
-                self.send_error(404)
-
-        def _handle_test(self):
-            """手动测试连接：抓一次并返回结果（不推送）。"""
-            try:
-                from urllib.error import HTTPError
-                tids, aids = monitor._resolve_ids()
-                result = []
-                ok = 0
-                for tid in tids:
-                    for aid in aids:
-                        try:
-                            posts = monitor.fetch_author_posts(tid, aid)
-                            ok += 1
-                            sample = posts[0] if posts else None
-                            result.append({
-                                "tid": tid, "authorid": aid,
-                                "count": len(posts),
-                                "sample": (clean_text(sample["content_text"])[:80] if sample else None),
-                            })
-                        except NgaError as e:
-                            result.append({"tid": tid, "authorid": aid, "error": str(e)})
-                        except Exception as e:
-                            result.append({"tid": tid, "authorid": aid, "error": f"抓取失败: {e}"})
-                self._send_json({"ok_total": ok, "results": result})
-            except Exception as e:
-                self._send_json({"error": str(e)}, status=500)
-
-        def do_POST(self):
-            path = urllib.parse.urlparse(self.path).path
-            length = int(self.headers.get("Content-Length", 0) or 0)
-            body = self.rfile.read(length) if length else b""
-            try:
-                data = json.loads(body.decode("utf-8", "ignore")) if body else {}
-            except Exception:
-                data = {}
-            if path == "/api/config":
-                monitor.update_config(data)
-                self._send_json({"ok": True, "config": monitor.snapshot().get("config")})
             else:
                 self.send_error(404)
 
