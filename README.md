@@ -55,7 +55,12 @@ python -m http.server 8000
 
 仅当你需要「突破自动推送企业微信」时才需要部署。
 
-### 1. 安装依赖
+### 1. 安装依赖（开箱即用，一般无需手动）
+
+监控脚本 `stock_monitor.py` 依赖 `requests` 与 `schedule`（见 `monitor/requirements.txt`）。
+**启动器会自动检测并在缺失时安装**，所以绝大多数情况下你什么都不用做——点「启动监控」、粘贴命令即可。
+
+仅在想手动预装或自动安装失败时运行：
 
 ```bash
 python -m pip install -r monitor/requirements.txt

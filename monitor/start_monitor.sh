@@ -44,10 +44,25 @@ echo "  Stock Monitor"
 echo "=============================="
 echo ""
 
+# 自动检测并安装第三方依赖（小白友好，无需手动 pip install）
+echo "[1/2] 检查依赖 (requests, schedule) ..."
+if ! "$PY" -c "import requests, schedule" >/dev/null 2>&1; then
+  echo "  缺少依赖，正在自动安装（首次需联网，稍候）..."
+  if ! "$PY" -m pip install -r "$SCRIPT_DIR/requirements.txt"; then
+    echo "依赖自动安装失败。请手动运行： $PY -m pip install -r requirements.txt" >&2
+    exit 1
+  fi
+  echo "  依赖安装完成。"
+else
+  echo "  依赖已就绪。"
+fi
+
+echo ""
+echo "[2/2] 启动监控 ..."
 "$PY" "$SCRIPT_DIR/stock_monitor.py"
 EXIT_CODE=$?
 echo ""
 echo "Monitor stopped."
 if [ "$EXIT_CODE" -ne 0 ]; then
-  echo "警告: 监控进程异常退出（退出码 $EXIT_CODE）。常见原因：未安装依赖（requests/schedule）。请运行 'pip install -r requirements.txt' 或设置 WB_PYTHON。" >&2
+  echo "警告: 监控进程异常退出（退出码 $EXIT_CODE）。请确认本机已安装 Python 3，或设置环境变量 WB_PYTHON 指向 python 可执行文件。" >&2
 fi

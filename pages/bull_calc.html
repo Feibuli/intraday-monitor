@@ -1263,22 +1263,22 @@
                 if (isWin) {
                     const psPath = repoDir + '/monitor/start_monitor.ps1';   // 回退到仓库根再进 monitor/
                     cmd = `powershell -ExecutionPolicy Bypass -File "${psPath}"`;
-                    tip = '启动命令已复制 → 右键管理员运行 cmd，粘贴回车（首次需管理员权限创建唤醒任务）';
+                    tip = '启动命令已复制 ✅ 打开 cmd（命令提示符）→ 右键粘贴 → 回车，依赖会自动安装并启动监控';
                 } else {
                     const shPath = repoDir + '/monitor/start_monitor.sh';
                     cmd = `bash "${shPath}"`;
-                    tip = '启动命令已复制 → 打开终端粘贴回车（macOS / Linux 用 start_monitor.sh）';
+                    tip = '启动命令已复制 ✅ 打开终端 → 粘贴 → 回车，依赖会自动安装并启动监控';
                 }
                 navigator.clipboard.writeText(cmd).then(() => {
                     ElMessage({
                         message: tip,
                         type: 'success',
-                        duration: 6000,
+                        duration: 8000,
                         showClose: true,
                     });
                 }).catch(() => {
                     ElMessageBox.alert(
-                        `<div style="font-size:12px;margin-bottom:8px;color:#94a3b8;">手动复制以下命令，右键管理员运行 cmd 粘贴：</div><pre style="white-space:pre-wrap;word-break:break-all;font-size:12px;color:#a8d8ff;background:#0d1b2a;padding:10px;border-radius:6px;user-select:all;">${cmd}</pre>`,
+                        `<div style="font-size:12px;margin-bottom:8px;color:#94a3b8;">手动复制以下命令，打开命令行（cmd / 终端）粘贴并回车即可，依赖会自动安装：</div><pre style="white-space:pre-wrap;word-break:break-all;font-size:12px;color:#a8d8ff;background:#0d1b2a;padding:10px;border-radius:6px;user-select:all;">${cmd}</pre>`,
                         '启动监控脚本',
                         { dangerouslyUseHTMLString: true, confirmButtonText: '关闭' }
                     );

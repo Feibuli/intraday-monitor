@@ -7,9 +7,10 @@
 $taskName = "StockMonitorWake"
 # Python 解释器路径解析顺序：
 #   1) 环境变量 WB_PYTHON（显式覆盖，最高优先级）
-#   2) WorkBuddy 内置 Python（位于 $env:USERPROFILE\.workbuddy\binaries\python\versions\<最新版本>\python.exe，已含 requests/schedule，开箱即用）
+#   2) WorkBuddy 内置 Python（位于 $env:USERPROFILE\.workbuddy\binaries\python\versions\<最新版本>\python.exe，已含纯标准库运行所需环境，开箱即用）
 #   3) PATH 中的 python / python3
 #   4) 以上都没有 → 给出可读错误
+# 说明：监控脚本依赖 requests、schedule（已在 requirements.txt 列出）。启动器会自动检测并在缺失时安装，实现开箱即用。
 if ($env:WB_PYTHON) {
     $pythonExe = $env:WB_PYTHON
 } else {
@@ -38,22 +39,43 @@ Write-Host "  Stock Monitor Launcher (with 9:15 wake)"
 Write-Host "============================================"
 Write-Host ""
 
-# Step 1: Register weekday 9:15 wake task
-Write-Host "[1/2] Registering weekday 9:15 wake task..."
+# 第 0 步：自动检测并安装第三方依赖（小白友好，无需手动 pip install）
+Write-Host "[1/3] Checking dependencies (requests, schedule)..."
+& $pythonExe -c "import requests, schedule" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  缺少依赖，正在自动安装（首次需联网，稍候）..."
+    & $pythonExe -m pip install -r "$workDir\requirements.txt"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "依赖自动安装失败。请手动运行： $pythonExe -m pip install -r requirements.txt"
+        Read-Host "Press Enter to exit"
+        exit 1
+    }
+    Write-Host "  依赖安装完成。"
+} else {
+    Write-Host "  依赖已就绪。"
+}
+
+# Step 1: Register weekday 9:15 wake task（尽力而为：未以管理员身份运行或注册失败都不影响监控启动）
+Write-Host ""
+Write-Host "[2/3] Registering weekday 9:15 wake task..."
 try {
     $t = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
     Write-Host "  Wake task already exists, skipping"
 } catch {
-    $action = New-ScheduledTaskAction -Execute $pythonExe -Argument "stock_monitor.py" -WorkingDirectory $workDir
-    $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "09:15"
-    $settings = New-ScheduledTaskSettingsSet -WakeToRun -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force
-    Write-Host "  Wake task created!"
+    try {
+        $action = New-ScheduledTaskAction -Execute $pythonExe -Argument "stock_monitor.py" -WorkingDirectory $workDir
+        $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday -At "09:15"
+        $settings = New-ScheduledTaskSettingsSet -WakeToRun -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
+        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force -ErrorAction Stop
+        Write-Host "  Wake task created!"
+    } catch {
+        Write-Warning "  未能创建唤醒任务（需要管理员权限）。不影响监控运行，可忽略；如需交易日自动唤醒，请用管理员身份运行本脚本。"
+    }
 }
 
 # Step 2: Start monitor
 Write-Host ""
-Write-Host "[2/2] Starting stock monitor..."
+Write-Host "[3/3] Starting stock monitor..."
 Set-Location $workDir
 & $pythonExe "$workDir\stock_monitor.py"
 $monitorExit = $LASTEXITCODE
@@ -61,6 +83,6 @@ $monitorExit = $LASTEXITCODE
 Write-Host ""
 Write-Host "Monitor stopped."
 if ($monitorExit -ne 0) {
-    Write-Warning "监控进程异常退出（退出码 $monitorExit）。常见原因：未安装依赖（requests/schedule），或 WB_PYTHON 指向的 Python 不正确。请运行 'python -m pip install -r requirements.txt' 或设置 WB_PYTHON 指向已安装依赖的 Python。"
+    Write-Warning "监控进程异常退出（退出码 $monitorExit）。常见原因：未找到可用的 Python，或 WB_PYTHON 指向的 Python 不正确。请确认本机已安装 Python 3，或设置环境变量 WB_PYTHON 指向 python.exe。"
 }
 Read-Host "Press Enter to exit"
