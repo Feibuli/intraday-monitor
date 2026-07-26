@@ -978,7 +978,7 @@
                             </div>
                         </template>
                     </el-table-column>
-                    <el-table-column label="现价" width="120" align="center">
+                    <el-table-column label="现价" width="165" align="center">
                         <template #default="scope">
                             <span
                                 :class="['chart-price-trigger', getPriceClass(scope.row.changePct)]"
@@ -988,7 +988,7 @@
                                 @mousemove="handlePriceHoverMove(scope.row, $event)"
                                 @mouseleave="handlePriceHoverLeave"
                                 @click="openChartDialog(scope.row)"
-                            >{{formatNum(scope.row.now, scope.row)}}({{formatPct(scope.row.changePct)}})</span>
+                            >{{formatNum(scope.row.now, scope.row)}} {{formatPct(scope.row.changePct)}}<span v-if="getDailyProfit(scope.row).has" :class="getDailyProfit(scope.row).cls" style="margin-left:6px;">{{getDailyProfit(scope.row).amt >= 0 ? '+' : ''}}{{getDailyProfit(scope.row).amt.toFixed(0)}}</span></span>
                         </template>
                     </el-table-column>
                     
@@ -1490,6 +1490,16 @@
                 return { amount, pct };
             };
 
+            // 计算当日盈亏（现价相对昨收的涨跌额 × 持仓手数 × 每手股数）
+            const getDailyProfit = (row) => {
+                const pos = parseFloat(row.position) || 0;
+                if (pos <= 0) return { has: false, amt: 0, cls: '' };
+                const change = parseFloat(row.change) || 0; // 每股当日涨跌额
+                const lotSize = 100; // A股1手=100股
+                const amt = change * pos * lotSize;
+                return { has: true, amt, cls: amt >= 0 ? 'up-text' : 'down-text' };
+            };
+
             const clearHoverShowTimer = () => {
                 if (!hoverShowTimer) return;
                 window.clearTimeout(hoverShowTimer);
@@ -1903,7 +1913,10 @@
                         row._prevBuyDate = row.buyDate;
                     }
                     const holdDays = getHoldDays(row.buyDate);
-                    const daysSinceHigh = row.highDate ? getHoldDays(row.highDate) : holdDays;
+                    // 时间证伪的 13 天窗口起点 = max(建仓日, 上次新高日)：
+                    // 建仓前的历史高点日期不应误触发；创新高后窗口从该高点重置。
+                    const refDate = (row.highDate && row.highDate > row.buyDate) ? row.highDate : row.buyDate;
+                    const daysSinceHigh = getHoldDays(refDate);
 
                     if (low > 0 && now < low * 0.97) {
                         row.signal = '破底止损'; row.adviceClass = 'suggestion-danger';
@@ -2302,7 +2315,7 @@
                 handlePriceHoverEnter, handlePriceHoverMove, handlePriceHoverLeave,
                 handleChartPopoverEnter, handleChartPopoverLeave,
                 chartDialog, getDialogChartUrl, openChartDialog, closeChartDialog, switchDialogChart,
-                launchMonitor, getPositionPct, formatPositionPct, getProfitInfo,
+                launchMonitor, getPositionPct, formatPositionPct, getProfitInfo, getDailyProfit,
                 monitorAll, toggleMonitorAll
             };
         }
