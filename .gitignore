@@ -13,9 +13,11 @@ __pycache__/
 # ---------- 运行时产物 ----------
 *.log
 monitor/*.pid
+*.tmp
 
 # ---------- NGA 大佬监控（本地缓存，勿提交） ----------
 monitor/nga_posts.json
+monitor/nga_posts.txt
 monitor/nga_debug_last.txt
 monitor/nga_monitor.pid
 

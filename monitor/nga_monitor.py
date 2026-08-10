@@ -66,7 +66,7 @@ WEBHOOK_URL = os.environ.get("WECHAT_WEBHOOK_URL", "")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PAGE_PATH = os.path.join(BASE_DIR, "..", "pages", "nga_monitor.html")
-POSTS_CACHE_PATH = os.path.join(BASE_DIR, "nga_posts.json")   # 最近发言缓存（gitignored，可选持久化）
+POSTS_CACHE_PATH = os.path.join(BASE_DIR, "nga_posts.json")   # 最近发言缓存（机器格式，页面数据源；gitignored）
 DEBUG_PATH = os.path.join(BASE_DIR, "nga_debug_last.txt")     # 解析失败时的原始响应（gitignored）
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -185,19 +185,34 @@ _ENTITY_MAP = {"&nbsp;": " ", "&amp;": "&", "&lt;": "<", "&gt;": ">",
 
 
 def clean_text(s):
-    """去除 HTML 标签与常见实体，得到纯文本（用于展示与推送）。"""
+    """把 NGA 帖子内容转为可读纯文本：
+      - 去掉 HTML 标签
+      - 剔除 NGA BBCode 标记（[b]/[color=]/[url=]/[img]/[quote] 等），但保留标记内的真实文字
+      - 去掉 NGA 自动生成的引用头部（[b]Reply … Post by … (date)[/b]）
+    只删“标记/脚手架”，不删作者发言的正文文字（发言一字不丢）。
+    """
     if not s:
         return ""
+    # 1) HTML 标签 → 空格
     s = _TAG_RE.sub(" ", s)
+    # 2) NGA 链接：保留文字，去掉 [url=...]/[url] 包裹
+    s = re.sub(r"\[url=[^\]]*\](.*?)\[/url\]", r"\1", s, flags=re.S)
+    s = re.sub(r"\[url\](.*?)\[/url\]", r"\1", s, flags=re.S)
+    # 3) 图片标记：替换为「[图片]」占位（图片本身无文字，但保留非空以免推送内容变空）
+    s = re.sub(r"\[img[^\]]*\].*?\[/img\]", " [图片] ", s, flags=re.S)
+    # 4) NGA 引用头部：[b]Reply to [pid=..]Reply[/pid] Post by [uid=..]NAME[/uid] (date)[/b]
+    #    用非贪婪匹配到首个 [/b] 为止——绝不吞掉 [/b] 之后的真实发言（曾因贪婪 [^\n]* 吃掉整条正文）。
+    s = re.sub(r"\[b\]Reply\b.*?\[/b\]", " ", s, flags=re.S)
+    # 5) 其余 BBCode 标记（[b] [/b] [color=..] [/color] [size=..] [quote] [/quote] [i] [u] [s:xx] [pid=..] [uid=..] 等）
+    #    移除标记本身，保留标记内的文字
+    s = re.sub(r"\[/?[a-zA-Z][a-zA-Z0-9]*[^\]]*\]", " ", s)
+    # 6) HTML 实体
     for k, v in _ENTITY_MAP.items():
         s = s.replace(k, v)
     s = html.unescape(s)
-    s = re.sub(r"\[[^\]]*\]", " ", s)        # 去掉 [img] [quote] 等 NGA 标签
-    # 去掉 NGA 引用前缀 "Reply Post by 用户名 (时间): "（时间冗余，列表已单独显示）
-    # 注意原始内容形如 [quote]...[b]Post by [uid]名[/uid] (时间): [/b]正文 ，
-    # 经上面的 [..] 标签清理后会变成 "  Reply  Post by 名 (时间): "，故用 \s+ 容忍空格。
-    s = re.sub(r"^\s*Reply\s+Post\s+by\s+.+?\(\d{4}-\d{2}-\d{2}[^)]*\):\s*", "", s)
-    s = re.sub(r"\s+", " ", s)
+    # 7) 折叠多余空白：横向空白压成单空格，纵向最多保留一个空行（保留段落结构）
+    s = re.sub(r"[ \t　]+", " ", s)
+    s = re.sub(r"\n{3,}", "\n\n", s)
     return s.strip()
 
 
@@ -410,19 +425,48 @@ def send_wecom_msg(content):
 
 
 def push_post(post):
-    """把一条新发言推送成企业微信消息。"""
+    """把一条新发言推送成企业微信消息（紧凑格式，尽量保留完整正文）。
+
+    作者与时间分两行，分别带「作者：/时间：」前缀；
+    作者有名称则不显示 UID（无名时回退显示 UID）；
+    内容使用企业微信引用格式（每行前缀 "> "）；
+    并按企业微信 markdown 正文 4096 字节上限自动截断——优先保住元数据，正文尽量多留。
+    """
+    author = post.get("author") or "未知"
+    authorid = post.get("authorid") or "?"
+    tm = post.get("time") or "未知"
+    url = post.get("url") or ""
     text = post.get("content_text") or clean_text(post.get("content", ""))
-    if len(text) > 220:
-        text = text[:220] + "…"
-    content = (
-        f"👤 **NGA 大佬发言提醒**\n"
-        f"> 作者：{post.get('author') or '未知'}（UID {post.get('authorid')}）\n"
-        f"> 时间：{post.get('time') or '未知'}\n"
-        f"> 帖子：tid {post.get('tid')}\n"
-        f"> 内容：{text}\n"
-        f"> 🔗 [点此查看]({post.get('url')})"
-    )
+    if not text.strip():
+        text = "（该发言无文字内容，可能是纯图片/附件，请点链接查看）"
+
+    # 作者有名称就不带 UID；无名时回退显示 UID 作为唯一标识
+    author_disp = author if author != "未知" else f"UID {authorid}"
+    # 内容每行加 "> " 前缀（企业微信引用格式）
+    quoted = "> " + "\n> ".join(text.split("\n"))
+
+    def build(q):
+        return (
+            f"🔔 NGA大佬新发言\n"
+            f"作者：{author_disp}\n"
+            f"时间：{tm}\n"
+            f"{q}\n"
+            f"🔗 [点此查看]({url})"
+        )
+
+    content = build(quoted)
+    # 企业微信 markdown 正文上限 4096 字节；超了就从正文尾部截断，绝不丢元数据
+    max_bytes = 4096
+    if len(content.encode("utf-8")) > max_bytes:
+        # 不含正文的模板体积 + 每行 ">" 前缀（首行 "> " 与每行分隔 "\n> " 合计 2×(换行数+1) 字节）
+        overhead = len(build("").encode("utf-8")) + 2 * text.count("\n") + 2
+        budget = max_bytes - overhead - 3            # 留 3 字节给省略号
+        if budget > 0:
+            cut = text.encode("utf-8")[:budget].decode("utf-8", "ignore")
+            content = build("> " + "\n> ".join(cut.split("\n")) + "…")
     send_wecom_msg(content)
+
+
 
 
 # ===================== 监控核心 =====================
@@ -439,6 +483,38 @@ class NgaMonitor:
         self.seeded = False
         self.thread_titles = {}   # tid(str) -> 帖子标题
         self.running = True
+        self.startup_pushed = False  # 启动推送（开启/恢复通知）只发一次
+        self.load_cache()        # 启动时恢复历史发言，使「开始监控后爬下来的帖子」跨重启保留
+
+    def load_cache(self):
+        """启动时从 nga_posts.json 恢复历史发言，使累积数据跨重启保留。
+
+        恢复后把已存在的 pid 标记为已见（seeded=True），避免重启后把历史当新发言刷屏推送；
+        但本轮真正新增（不在缓存中的）发言仍会正常推送。
+        """
+        try:
+            if not os.path.exists(POSTS_CACHE_PATH):
+                return
+            with open(POSTS_CACHE_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            posts = data.get("posts") or []
+            if not posts:
+                return
+            with self.lock:
+                self.posts = posts
+                self.seen_pids = {str(p.get("pid")) for p in posts if p.get("pid")}
+                for p in posts:
+                    # 用最新 clean_text 重新生成 content_text（修复历史缓存里被旧规则清空/带标记的脏数据）
+                    if "content" in p:
+                        p["content_text"] = clean_text(p.get("content", ""))
+                    tt = p.get("thread_title")
+                    if tt:
+                        self.thread_titles[str(p.get("tid"))] = tt
+                if self.seen_pids:
+                    self.seeded = True
+            print(f"[{datetime.now():%H:%M:%S}] 已从缓存恢复 {len(posts)} 条历史发言。")
+        except Exception as e:
+            print(f"[缓存] 恢复失败: {e}")
 
     # ---------- 抓取 ----------
     def fetch_author_posts(self, tid, authorid):
@@ -571,24 +647,33 @@ class NgaMonitor:
         by_pid = {}
         for p in all_posts:
             by_pid[p["pid"]] = p
-        posts = sorted(by_pid.values(), key=lambda x: x["ts"], reverse=True)
 
         with self.lock:
+            # 累积：保留历史上所有已见发言（含更早轮次抓到、现已滚出末页的旧帖），
+            # 仅把本次新出现的 pid 追加进来。这样「开始监控后爬下来的帖子」全部留存。
+            existing = {p["pid"]: p for p in self.posts}
+            new_posts = []
+            for pid, p in by_pid.items():
+                if pid not in existing:
+                    existing[pid] = p
+                    new_posts.append(p)
+                else:
+                    # 同一 pid 元数据可能更新（如帖子标题），但内容一般不会变，做轻量合并
+                    existing[pid].update({k: v for k, v in p.items()
+                                         if k in ("thread_title", "time", "ts")})
+            posts = sorted(existing.values(), key=lambda x: x["ts"], reverse=True)
+
             self.posts = posts
             self.last_check = time.time()
             self.last_error = "; ".join(errors)
             if not errors:
                 self.last_success = time.time()
 
-            new_posts = [p for p in posts if p["pid"] not in self.seen_pids]
             if not self.seeded:
                 # 首次/配置变更后的静默播种：只记录已见，不推送历史
                 self.seen_pids.update(p["pid"] for p in posts)
                 self.seeded = True
                 print(f"[{datetime.now():%H:%M:%S}] 已播种 {len(posts)} 条历史发言（不推送）。")
-                # 启动推送：告知监控已开启（未配置 webhook 则安全跳过；--test 调试模式不推送）
-                if do_push_startup:
-                    self.push_startup(targets)
             else:
                 if self.config.get("monitor_enabled") and new_posts:
                     for p in sorted(new_posts, key=lambda x: x["ts"]):
@@ -597,6 +682,11 @@ class NgaMonitor:
                     self.seen_pids.update(p["pid"] for p in new_posts)
                     self.last_push = time.time()
                     print(f"[{datetime.now():%H:%M:%S}] 本轮新增 {len(new_posts)} 条，已推送。")
+
+            # 启动推送（开启/恢复通知）只发一次；未配置 webhook 或 --test 调试模式安全跳过
+            if do_push_startup and not self.startup_pushed:
+                self.push_startup(targets)
+                self.startup_pushed = True
         self.save_cache()
 
     def push_startup(self, targets):
@@ -619,14 +709,28 @@ class NgaMonitor:
         send_wecom_msg("\n".join(lines))
 
     def save_cache(self):
+        """把累积的全部发言原子写入 nga_posts.json（落盘即页面读取的唯一数据源）。
+
+        采用「写临时文件 + os.replace 原子替换」：页面每次刷新都直接读这份文件，
+        若用普通覆盖写，读取方可能在写入中途拿到半截 JSON 而报错；原子替换
+        保证页面任何时候读到的都是完整的一整份文件。
+        """
         try:
             with self.lock:
+                posts = self.posts
+                # 上限保护：长期运行避免无限膨胀，仅保留最新的若干条（仍远多于「末页」）
+                CAP = 5000
+                if len(posts) > CAP:
+                    posts = posts[:CAP]
                 data = {
                     "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "posts": self.posts[:200],
+                    "posts": posts,
                 }
-            with open(POSTS_CACHE_PATH, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+                text = json.dumps(data, ensure_ascii=False, indent=2)
+            tmp = POSTS_CACHE_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(text)
+            os.replace(tmp, POSTS_CACHE_PATH)
         except Exception:
             pass
 
@@ -675,8 +779,25 @@ class NgaMonitor:
             targets = self._resolve_ids()
         tids = [t["tid"] for t in targets]
         aids = sorted({a for t in targets for a in t["authorids"]})
-        # 固定展示每个作者的最后一页（末页条数不固定，全量返回，前端按帖子分组展示）
-        visible = posts[:600]
+        # 返回累积的全部发言（前端按帖子分组并自行分页），不再截断为末页。
+        visible = posts
+        # 按帖子维度统计：配置目标优先排序，再补上历史残留的其它 tid
+        thread_counts = {}
+        thread_titles_map = {}
+        for p in posts:
+            t = str(p.get("tid"))
+            thread_counts[t] = thread_counts.get(t, 0) + 1
+            if p.get("thread_title"):
+                thread_titles_map[t] = p["thread_title"]
+        threads = [
+            {"tid": t["tid"], "title": self.thread_titles.get(str(t["tid"]), ""),
+             "count": thread_counts.get(str(t["tid"]), 0)}
+            for t in targets
+        ]
+        seen_tids = {str(t["tid"]) for t in targets}
+        for t, c in thread_counts.items():
+            if t not in seen_tids:
+                threads.append({"tid": t, "title": thread_titles_map.get(t, ""), "count": c})
         out = {
             "status": {
                 "monitor_enabled": monitor_enabled,
@@ -695,6 +816,7 @@ class NgaMonitor:
                      "authorids": t["authorids"]}
                     for t in targets
                 ],
+                "threads": threads,
                 "refresh_interval": int(cfg.get("refresh_interval", 60)),
                 "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             },
@@ -747,8 +869,20 @@ def make_handler(monitor):
             if path in ("/", "/index.html"):
                 self._send_file(PAGE_PATH, "text/html; charset=utf-8")
             elif path == "/api/posts":
-                # 页面只读接口：返回 { status, posts }
-                self._send_json(monitor.snapshot())
+                # 页面只读接口：status 来自内存（轻量），posts 直接读落盘文件 nga_posts.json，
+                # 因此页面本质就是在读取这份「监控收到新消息就自动保存」的文件（文件即唯一数据源）。
+                status = monitor.snapshot().get("status")
+                try:
+                    with open(POSTS_CACHE_PATH, "r", encoding="utf-8") as f:
+                        disk = json.load(f)
+                    disk_posts = disk.get("posts") or []
+                except FileNotFoundError:
+                    disk_posts = []
+                except Exception:
+                    disk_posts = list(monitor.posts)
+                status = dict(status or {})
+                status["cached"] = len(disk_posts)
+                self._send_json({"status": status, "posts": disk_posts})
             elif path == "/api/status":
                 self._send_json(monitor.snapshot().get("status"))
             elif path == "/api/config":

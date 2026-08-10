@@ -36,7 +36,7 @@
  input:focus{border-color:var(--blue)}
  input:disabled{opacity:.6}
 
- .bar{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap}
+ .bar{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:nowrap;white-space:nowrap}
  button{ background:linear-gradient(135deg,var(--blue),var(--cyan));color:#04121f;border:0;
    padding:9px 15px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit; }
  button:active{transform:translateY(1px)}
@@ -82,12 +82,24 @@
  .post a{color:var(--blue);text-decoration:none;font-size:12px}
  .post a:hover{text-decoration:underline}
  .empty{color:var(--muted);font-size:13px;text-align:center;padding:30px 0}
- .statusline{font-size:12px;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+ .statusline{font-size:12px;color:var(--muted);margin-top:10px;margin-bottom:16px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}
  .statusline b{color:var(--text)}
  .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:#0a1626;border:1px solid var(--line-strong);
    color:var(--text);padding:10px 18px;border-radius:10px;font-size:13px;opacity:0;transition:.25s;pointer-events:none;max-width:90vw}
  .toast.show{opacity:1}
  .pill{display:inline-block;font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:20px;padding:2px 9px;margin-left:8px}
+
+ /* 分页 */
+ .ps-label{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);white-space:nowrap;flex-shrink:0}
+ .ps-label select{background:#06101c;border:1px solid var(--line);border-radius:8px;padding:6px 8px;color:var(--text);font-size:12px;font-family:inherit;outline:none}
+ .ps-label select:focus{border-color:var(--blue)}
+ .thread-actions{display:inline-flex;align-items:center;gap:8px}
+ .export-btn{background:transparent;border:1px solid var(--line-strong);color:var(--cyan);padding:4px 11px;border-radius:8px;font-size:12px;cursor:pointer;font-family:inherit;white-space:nowrap}
+ .export-btn:hover{background:rgba(57,217,255,0.08);color:var(--text)}
+ .pager{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0 2px;padding:0 2px}
+ .pager .pg-info{font-size:12px;color:var(--muted)}
+ .pager .pg-ctrl{display:inline-flex;gap:6px}
+ .pager button{padding:4px 11px;font-size:12px;border-radius:8px}
 </style>
 </head>
 <body>
@@ -124,8 +136,19 @@
     <h2>📜 大佬最近发言（按帖子分组）</h2>
     <div class="bar">
       <button id="refreshBtn">🔄 立即刷新</button>
-      <span class="statusline" id="status"></span>
+      <button id="exportAllBtn" class="ghost">⬇️ 下载</button>
+      <span class="ps-label">每页
+        <select id="pageSize">
+          <option value="10">10</option>
+          <option value="15" selected>15</option>
+          <option value="20">20</option>
+          <option value="30">30</option>
+          <option value="50">50</option>
+          <option value="100000">全部</option>
+        </select>
+      条</span>
     </div>
+    <div class="statusline" id="status"></div>
     <div id="list"><div class="empty">填写配置并选择帖子目标后，回到此页点击「立即刷新」查看大佬发言。</div></div>
   </div>
 </div>
@@ -144,9 +167,17 @@
   const startBtn=$('startBtn'), refreshBtn=$('refreshBtn');
   const cfgBody=$('cfgBody'), toggleBtn=$('toggleCfg');
   const listEl=$('list'), statusEl=$('status'), bannerEl=$('banner'), dotEl=$('dot'), toastEl=$('toast');
+  const exportAllBtn=$('exportAllBtn'), pageSizeSel=$('pageSize');
 
   // 监控目标列表（每个 {tid, aids}）；aids 为逗号分隔字符串
   let targets = [];
+
+  // 帖子分页 / 导出相关状态
+  let lastPosts = [];      // 最近一次拉取的全部帖子（后端已累积所有历史）
+  let lastTargets = [];    // 最近一次拉取的监控目标（决定分组顺序）
+  let pageSize = 15;       // 每帖每页条数
+  let pageState = {};      // { tid: 当前页码 }
+  let openState = {};      // { tid: 是否展开 }，翻页重渲染时保留展开状态
 
   // 配置持久化到浏览器 localStorage（打开页面自动回填）
   const STORAGE_KEY='nga_monitor_cfg_v2';
@@ -281,18 +312,34 @@
       const g=groups[tid]||[];
       const title=(g[0]&&g[0].thread_title)||('tid '+tid);
       const authorNames=[...new Set(g.map(p=>(p.author||p.authorid||'').trim()).filter(Boolean))];
-      const det=document.createElement('details'); det.className='thread'; det.open=true;
+      const total=g.length;
+      // 分页计算（每帖独立翻页）
+      const ps=pageSize;
+      const tp=Math.max(1, Math.ceil(total/ps));
+      let cur=pageState[tid]||1; if(cur>tp) cur=tp; pageState[tid]=cur;
+      const start=(cur-1)*ps;
+      const slice=g.slice(start, start+ps);
+
+      const det=document.createElement('details'); det.className='thread';
+      det.open = (tid in openState) ? openState[tid] : true;
+      det.addEventListener('toggle', ()=>{ openState[tid]=det.open; });
       const sum=document.createElement('summary');
       const left=document.createElement('div'); left.className='t-left';
       const t1=document.createElement('div'); t1.className='t-title'; t1.textContent=title;
       const t2=document.createElement('div'); t2.className='t-meta';
-      t2.innerHTML='作者：<b>'+(authorNames.join('、')||'配置中')+'</b> · '+g.length+' 条'+(g[0]?(' · uid '+g[0].authorid):'');
+      t2.innerHTML='作者：<b>'+(authorNames.join('、')||'配置中')+'</b> · 共 '+total+' 条'+(g[0]?(' · uid '+g[0].authorid):'');
       left.appendChild(t1); left.appendChild(t2);
       const chev=document.createElement('span'); chev.className='chev'; chev.textContent='▼';
-      sum.appendChild(left); sum.appendChild(chev);
+      // 右侧：本帖下载 + 折叠箭头
+      const right=document.createElement('span'); right.className='thread-actions';
+      const dl=document.createElement('button'); dl.className='export-btn'; dl.textContent='⬇';
+      dl.title='下载本帖子的发言';
+      dl.addEventListener('click', (e)=>{ e.stopPropagation(); exportTxt(tid); });
+      right.appendChild(dl); right.appendChild(chev);
+      sum.appendChild(left); sum.appendChild(right);
       det.appendChild(sum);
+
       const postsWrap=document.createElement('div'); postsWrap.className='posts';
-      const slice=g;
       if(!slice.length){
         const e=document.createElement('div'); e.className='empty'; e.style.padding='14px 0';
         e.textContent='该帖子暂无匹配发言（可能作者暂无发言或帖子不存在）。';
@@ -302,20 +349,92 @@
         const card=document.createElement('div'); card.className='post';
         const meta=document.createElement('div'); meta.className='meta';
         const a=document.createElement('span'); a.className='author'; a.textContent=p.author||('UID '+p.authorid);
-        const right=document.createElement('span'); right.style.display='inline-flex'; right.style.alignItems='center'; right.style.gap='8px';
+        const r=document.createElement('span'); r.style.display='inline-flex'; r.style.alignItems='center'; r.style.gap='8px';
         const time=document.createElement('span'); time.textContent=p.time||'';
         const link=document.createElement('a'); link.textContent='🔗'; link.href=p.url||'#'; link.target='_blank'; link.rel='noopener'; link.title='在 NGA 查看';
         link.style.fontSize='12px';
-        right.appendChild(time); right.appendChild(link);
-        meta.appendChild(a); meta.appendChild(right);
+        r.appendChild(time); r.appendChild(link);
+        meta.appendChild(a); meta.appendChild(r);
         const body=document.createElement('div'); body.className='body'; body.textContent=p.content_text||p.content||'(无内容)';
         card.appendChild(meta); card.appendChild(body);
         postsWrap.appendChild(card);
       });
+
+      // 分页控件
+      const pager=document.createElement('div'); pager.className='pager';
+      const info=document.createElement('span'); info.className='pg-info';
+      info.textContent='第 '+cur+' / '+tp+' 页';
+      const ctrl=document.createElement('span'); ctrl.className='pg-ctrl';
+      const prev=document.createElement('button'); prev.className='ghost'; prev.textContent='‹ 上一页'; prev.disabled=(cur<=1);
+      prev.addEventListener('click', ()=>{ pageState[tid]=Math.max(1,cur-1); renderAll(); });
+      const next=document.createElement('button'); next.className='ghost'; next.textContent='下一页 ›'; next.disabled=(cur>=tp);
+      next.addEventListener('click', ()=>{ pageState[tid]=Math.min(tp,cur+1); renderAll(); });
+      ctrl.appendChild(prev); ctrl.appendChild(next);
+      pager.appendChild(info); pager.appendChild(ctrl);
+      postsWrap.appendChild(pager);
+
       det.appendChild(postsWrap);
       listEl.appendChild(det);
     });
   }
+
+  // 用最近一次数据重新分组渲染（翻页/改每页条数时调用，无需重新请求后端）
+  function renderAll(){
+    const {groups, order}=groupPosts(lastPosts, lastTargets);
+    renderGroups(groups, order);
+  }
+
+  // ===== 纯浏览器端生成可读文本并下载（不依赖任何后端接口） =====
+  function pad2(n){ return String(n).padStart(2,'0'); }
+  // 按帖子维度导出纯文本（tid 指定单帖，传 null 导出全部）；纯前端生成，不请求后端
+  // 格式：每行 [时间] 作者 正文；一行一条，简单明了
+  function exportTxt(tid){
+    if(!lastPosts.length){ toast('尚无数据，请先「立即刷新」加载发言'); return; }
+    const now=new Date();
+    const stamp=`${now.getFullYear()}${pad2(now.getMonth()+1)}${pad2(now.getDate())}_${pad2(now.getHours())}${pad2(now.getMinutes())}${pad2(now.getSeconds())}`;
+    const safeName=s=>(s||'').replace(/[\\/:*?"<>|]/g,'_').replace(/\s+/g,' ').trim().slice(0,60);
+    const fmtTime=t=>{ if(!t) return ''; const s=(''+t).trim();
+      if(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(s)) return s.slice(0,16);
+      if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
+      return s; };
+    const fmtAuthor=p=>{ const a=p.author; return (a&&a!=='未知')?a:('UID '+p.authorid); };
+    const fmtBody=p=>(p.content_text||p.content||'(无内容)').trim();
+    const lineOf=p=>{
+      const prefix=`[${fmtTime(p.time)}] ${fmtAuthor(p)} `;
+      const lines=fmtBody(p).split('\n');
+      const indent=' '.repeat(prefix.length);
+      return lines.map((ln,i)=>(i===0?prefix:indent)+ln).join('\n');
+    };
+    const sel=lastPosts.filter(p=>(tid==null)||(String(p.tid)===String(tid)));
+    if(tid!=null){
+      sel.sort((a,b)=>(a.ts||0)-(b.ts||0));
+      const title=(sel[0]&&sel[0].thread_title)||('tid '+tid);
+      const authors=[...new Set(sel.map(fmtAuthor))];
+      const name=`${safeName(title)}_${authors.map(safeName).join('_')}_${stamp}`;
+      download(sel.map(lineOf).join('\n')+'\n', `${name}.txt`);
+      toast('已下载');
+      return;
+    }
+    sel.sort((a,b)=>String(a.tid).localeCompare(String(b.tid))||((a.ts||0)-(b.ts||0)));
+    const groups={}; sel.forEach(p=>{ (groups[String(p.tid)]=groups[String(p.tid)]||[]).push(p); });
+    const order=[]; (lastTargets||[]).forEach(t=>{ const k=String(t.tid); if(groups[k]&&!order.includes(k)) order.push(k); });
+    Object.keys(groups).forEach(k=>{ if(!order.includes(k)) order.push(k); });
+    const L=[];
+    order.forEach(t=>{
+      const ps=groups[t]; const ttl=(ps[0]&&ps[0].thread_title)||'';
+      L.push(`=== ${ttl} ===`); ps.forEach(p=>L.push(lineOf(p))); L.push('');
+    });
+    download(L.join('\n'), `NGA_全部帖子_${stamp}.txt`);
+    toast('已下载全部帖子');
+  }
+  function download(text,fname){
+    const blob=new Blob([text],{type:'text/plain;charset=utf-8'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download=fname; a.target='_blank'; a.rel='noopener'; a.style.display='none';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
+
 
   async function refresh(){
     if(!ONLINE) await connect();
@@ -338,14 +457,21 @@
         ' · 上次推送 '+fmt(st.last_push)+
         ' · 缓存 '+st.cached+' 条'+
         ' · NGA登录 '+(st.has_cookie?'已填':'未填');
-      const {groups, order}=groupPosts(data.posts||[], st.targets);
-      renderGroups(groups, order);
+      lastPosts = data.posts||[];
+      lastTargets = st.targets||[];
+      renderAll();
     }catch(e){
       listEl.innerHTML='<div class="empty">无法连接后端，请确认监控已启动。</div>';
     }
   }
 
   refreshBtn.addEventListener('click',refresh);
+  exportAllBtn.addEventListener('click',()=>exportTxt(null));
+  pageSizeSel.addEventListener('change',()=>{
+    pageSize=parseInt(pageSizeSel.value)||15;
+    pageState={};          // 切换每页条数后各帖回到第 1 页
+    renderAll();
+  });
   loadCfg();        // 打开页面先从本浏览器回填配置
   if(!targets.length) targets=[{tid:'',aids:''}];   // 保证至少一张目标卡片可填
   renderTargets();
