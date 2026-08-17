@@ -51,6 +51,10 @@
    font-weight:700;transition:transform .18s,box-shadow .18s,opacity .18s}
  .btn:hover{transform:translateY(-1px)}
  .btn.secondary{background:rgba(255,255,255,.06);color:#dbe9ff;border:1px solid var(--line);box-shadow:none}
+ .ivl{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:13px;white-space:nowrap}
+ .ivl select{background:rgba(94,168,255,.12);color:#cfe1ff;border:1px solid rgba(94,168,255,.4);border-radius:10px;padding:8px 10px;font:inherit;cursor:pointer}
+ .ivl select:focus{outline:none;border-color:rgba(94,168,255,.85);box-shadow:0 0 0 3px rgba(94,168,255,.18)}
+ .ivl select option{background:#0d1830;color:#cfe1ff}
  /* 模式切换：醒目显示当前是行业还是概念 */
  .badge.mode-ind{font-size:14px;font-weight:800;padding:9px 16px;
    background:linear-gradient(135deg,rgba(74,134,255,.30),rgba(56,217,255,.18));
@@ -108,6 +112,17 @@
  td.v{text-align:right;font-variant-numeric:tabular-nums}
  .in{color:var(--red)}.out{color:var(--cyan)}
  .empty{color:var(--muted);padding:8px 2px}
+ .anom-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+ .anom-head h3{margin:0}
+ .anom-tabs{display:flex;gap:4px}
+ .anom-tabs button{background:transparent;color:var(--muted);border:none;border-radius:0;padding:5px 9px;font:inherit;font-size:12px;cursor:pointer;transition:color .15s}
+ .anom-tabs button:hover{color:#cfe1ff}
+ .anom-tabs button.active{color:#5ea8ff;font-weight:600}
+ .anom-t{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px}
+ .anom-t th{padding:5px 7px;color:var(--muted);font-weight:600;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+ .anom-t th.h{color:#cfe1ff;border-bottom-color:rgba(94,168,255,.5)}
+ .anom-t td{padding:5px 7px;white-space:nowrap}
+ .anom-t td.v{text-align:right}
  td.x{text-align:right;white-space:nowrap}
  td.x .s{cursor:pointer;color:var(--amber);opacity:.7;font-size:12px;padding:0 2px}
  td.x .s.on{opacity:1;color:var(--amber);text-shadow:0 0 6px rgba(255,184,92,.65)}
@@ -166,7 +181,7 @@
  <header class="hero">
   <div>
    <h1>盘中信息台</h1>
-   <p>A 股盘中实时信息台。当前模块：跟踪各板块 / 概念的主力资金动向——当日累计净流入排行、分时累计曲线，并自动监测近 5 分钟的资金异动（急流入 / 急流出）。</p>
+   <p>A 股盘中实时信息台。当前模块：跟踪各板块 / 概念的主力资金动向——当日累计净流入排行、分时累计曲线，并自动监测盘中资金异动（急流入 / 急流出），窗口跟随刷新间隔。</p>
    <div class="hero-badge-row">
     <span class="badge" id="kindBadge">概念板块</span>
     <span class="badge">主力 = 超大单+大单净额</span>
@@ -182,6 +197,17 @@
     <div>下次刷新　<b id="countdown">—</b></div>
    </div>
    <div class="btn-row">
+    <label class="ivl">刷新间隔
+     <select id="ivlSel">
+      <option value="30">30秒</option>
+      <option value="60">1分</option>
+      <option value="120">2分</option>
+      <option value="180">3分</option>
+      <option value="300" selected>5分</option>
+      <option value="600">10分</option>
+      <option value="900">15分</option>
+     </select>
+    </label>
     <button class="btn" id="refreshBtn">↻ 立即刷新</button>
     <button class="btn secondary" id="kindBtn">切换 概念/行业</button>
    </div>
@@ -193,7 +219,7 @@
   <div class="module-header">
    <div class="module-title">
     <h2>板块资金流 · 盘中</h2>
-    <p>当日累计主力资金净流入（亿元），每条线一个板块，末端标注金额；右侧异动按近 5 分钟 Δ净流入排名。</p>
+    <p>当日累计主力资金净流入（亿元），每条线一个板块，末端标注金额；右侧异动按 Δ净流入排名。</p>
    </div>
    <div class="timestamp" id="modTime">—</div>
   </div>
@@ -201,7 +227,7 @@
   <div class="grid-cards">
    <div class="card"><div class="label">最强流入板块</div><div class="value in" id="cardIn">—</div><div class="meta" id="cardInMeta">—</div></div>
    <div class="card"><div class="label">最强流出板块</div><div class="value out" id="cardOut">—</div><div class="meta" id="cardOutMeta">—</div></div>
-   <div class="card"><div class="label">近 5 分钟异动</div><div class="value" id="cardAnom">—</div><div class="meta" id="cardAnomMeta">盘中才计</div></div>
+   <div class="card"><div class="label">异动板块</div><div class="value" id="cardAnom">—</div><div class="meta" id="cardAnomMeta">盘中才计</div></div>
    <div class="card"><div class="label">板块资金广度</div><div class="value" id="cardBreadth">—</div><div class="meta" id="cardBreadthMeta">净流入 / 净流出 板块数</div></div>
   </div>
 
@@ -233,7 +259,7 @@
 
   <div class="two-col">
    <div class="panel"><h3>累计净流入榜（全部板块）</h3><div class="lb-scroll"><table id="lb"><tr><td class="empty">加载中…</td></tr></table></div></div>
-   <div class="panel"><h3 id="anomh">⚡ 近 5 分钟异动（Δ净流入）</h3><div id="anom"><div class="empty">加载中…</div></div></div>
+   <div class="panel"><div class="anom-head"><h3 id="anomh">⚡ 异动板块</h3><div class="anom-tabs" id="anomTabs"><button data-sort="win" class="active">1min</button><button data-sort="5m">5min</button><button data-sort="cum">累计</button></div></div><div id="anom"><div class="empty">加载中…</div></div></div>
   </div>
  </section>
 
@@ -261,7 +287,7 @@
 /* ============ 配置 ============ */
 const CFG = {
   industry:true, top:8, intervalSec:300,
-  anomalyWin:5, anomalyRank:3, anomalyFloor:2.0,
+  anomalyRank:10,
   host:"https://push2delay.eastmoney.com",
 };
 const TRADE26 = "0105,0106,0107,0108,0109,0112,0113,0114,0115,0116,0119,0120,0121,0122,0123,0126,0127,0128,0129,0130,0202,0203,0204,0205,0206,0209,0210,0211,0212,0213,0224,0225,0226,0227,0302,0303,0304,0305,0306,0309,0310,0311,0312,0313,0316,0317,0318,0319,0320,0323,0324,0325,0326,0327,0330,0331,0401,0402,0403,0407,0408,0409,0410,0413,0414,0415,0416,0417,0420,0421,0422,0423,0424,0427,0428,0429,0430,0506,0507,0508,0511,0512,0513,0514,0515,0518,0519,0520,0521,0522,0525,0526,0527,0528,0529,0601,0602,0603,0604,0605,0608,0609,0610,0611,0612,0615,0616,0617,0618,0622,0623,0624,0625,0626,0629,0630,0701,0702,0703,0706,0707,0708,0709,0710,0713,0714,0715,0716,0717,0720,0721,0722,0723,0724,0727,0728,0729,0730,0731,0803,0804,0805,0806,0807,0810,0811,0812,0813,0814,0817,0818,0819,0820,0821,0824,0825,0826,0827,0828,0831,0901,0902,0903,0904,0907,0908,0909,0910,0911,0914,0915,0916,0917,0918,0921,0922,0923,0924,0928,0929,0930,1008,1009,1012,1013,1014,1015,1016,1019,1020,1021,1022,1023,1026,1027,1028,1029,1030,1102,1103,1104,1105,1106,1109,1110,1111,1112,1113,1116,1117,1118,1119,1120,1123,1124,1125,1126,1127,1130,1201,1202,1203,1204,1207,1208,1209,1210,1211,1214,1215,1216,1217,1218,1221,1222,1223,1224,1225,1228,1229,1230,1231".split(",");
@@ -405,15 +431,39 @@ function renderSVG(seriesList,title,W,H){
   return P.join("\n");
 }
 let LASTCHART=null,LAST_SERIES=[],LAST_TITLE="";
+let SORT_MODE=(localStorage.getItem("sf_anomsort")||"win");
+let LAST_CURR=null,LAST_PREV=null,LAST_PREV5=null,LAST_NOW=null;
 
 /* ============ 异动 ============ */
 const HISTORY=[];
-function pickHistory(now,winMin){const target=now-winMin*60000;let best=null;
-  for(const h of HISTORY)if(h.t.getTime()<=target)best=h.snap;return best;}
-function scanAnom(curr,prev,rank,floor){if(!prev)return [[],[]];const ds=[];
-  for(const code in curr){if(code in prev){ds.push([curr[code][0],curr[code][1]-prev[code][1],curr[code][1]]);}}
-  return [ds.filter(x=>x[1]>=floor).sort((a,b)=>b[1]-a[1]).slice(0,rank),
-          ds.filter(x=>x[1]<=-floor).sort((a,b)=>a[1]-b[1]).slice(0,rank)];}
+function snapAt(now,winMin){const target=now-winMin*60000;let best=null,bestT=0;
+  for(const h of HISTORY)if(h.t.getTime()<=target){best=h.snap;bestT=h.t.getTime();}
+  if(best)return {snap:best,elapsed:Math.round((now.getTime()-bestT)/60000)};
+  if(HISTORY.length){const o=HISTORY[0];return {snap:o.snap,elapsed:Math.round((now.getTime()-o.t.getTime())/60000)};}
+  return null;}
+function scanAnom(curr,prev,prev5,rank,mode){const getv=(r)=>mode==='cum'?r[3]:mode==='5m'?r[2]:r[1];
+  const rows=[];
+  for(const code in curr){const cum=curr[code][1];let dWin=null,d5=null;
+    if(prev&&code in prev)dWin=cum-prev[code][1];
+    if(prev5&&code in prev5)d5=cum-prev5[code][1];
+    if(mode!=='cum'&&getv([0,dWin,d5,cum])===null)continue;
+    rows.push([curr[code][0],dWin,d5,cum]);}
+  return [rows.filter(r=>getv(r)>0).sort((a,b)=>getv(b)-getv(a)).slice(0,rank),
+          rows.filter(r=>getv(r)<0).sort((a,b)=>getv(a)-getv(b)).slice(0,rank)];}
+function renderAnom(){const now=LAST_NOW,curr=LAST_CURR,prev=LAST_PREV,prev5=LAST_PREV5;
+  if(!now)return [[],[]];
+  const winMin=CFG.intervalSec/60,winLbl=winMin+"m";
+  const lbl={win:winMin+"min",'5m':"5min",cum:"累计"};
+  document.querySelectorAll("#anomTabs button").forEach(b=>{b.textContent=lbl[b.dataset.sort];});
+  const [ain,aout]=(tradingNow(now)&&prev)?scanAnom(curr,prev,prev5,CFG.anomalyRank,SORT_MODE):[[],[]];
+  const cD=(v,u)=>(v===null||v===undefined||!isFinite(v))?'<td class="v empty">—</td>':`<td class="v ${v>=0?'in':'out'}">${v>=0?'+':''}${v.toFixed(1)}亿/${u}</td>`;
+  const cC=v=>`<td class="v ${v>=0?'in':'out'}">${fmt(v)}</td>`;
+  let a="";
+  if(ain.length){a+=`<table class="anom-t"><tbody>`;ain.forEach(x=>a+=`<tr><td class="in">⚡▲ ${x[0]}</td>${cD(x[1],winLbl)}${cD(x[2],'5m')}${cC(x[3])}</tr>`);a+=`</tbody></table>`;}
+  if(aout.length){a+=`<table class="anom-t"><tbody>`;aout.forEach(x=>a+=`<tr><td class="out">⚡▼ ${x[0]}</td>${cD(x[1],winLbl)}${cD(x[2],'5m')}${cC(x[3])}</tr>`);a+=`</tbody></table>`;}
+  if(!ain.length&&!aout.length)a=`<div class="empty">${tradingNow(now)?"近期无超阈异动":"非盘中，不计异动"}</div>`;
+  document.getElementById("anom").innerHTML=a;
+  return [ain,aout];}
 
 /* ============ 状态 ============ */
 function pad2(n){return (n<10?"0":"")+n;}
@@ -463,17 +513,14 @@ async function refresh(){
     lout.forEach(r=>h+=`<tr><td class="out">▼ ${r[0]}</td><td class="v out">${fmt(r[1])}</td><td class="x">${star(r)}</td></tr>`);
     document.getElementById("lb").innerHTML=h||'<tr><td class="empty">暂无</td></tr>';
 
-    // 异动
-    let ain=[],aout=[];
-    if(tradingNow(now)){const prev=pickHistory(now,CFG.anomalyWin);[ain,aout]=scanAnom(curr,prev,CFG.anomalyRank,CFG.anomalyFloor);}
-    HISTORY.push({t:now,snap:curr});const cutoff=now-Math.max(40,CFG.anomalyWin*4)*60000;
+    // 异动：缓存「上一次刷新」与「5分钟前」快照，排序由标题 tab 控制
+    const winMin=CFG.intervalSec/60;
+    const lastH=HISTORY.length?HISTORY[HISTORY.length-1]:null;
+    LAST_NOW=now; LAST_CURR=curr; LAST_PREV=lastH?lastH.snap:null;
+    const ph5=snapAt(now,5); LAST_PREV5=ph5?ph5.snap:null;
+    HISTORY.push({t:now,snap:curr});const cutoff=now-Math.max(40,winMin*4)*60000;
     while(HISTORY.length&&HISTORY[0].t.getTime()<cutoff)HISTORY.shift();
-    document.getElementById("anomh").textContent="⚡ 近 "+CFG.anomalyWin+" 分钟异动（Δ净流入）";
-    let a="";
-    if(ain.length){a+="<table>";ain.forEach(x=>a+=`<tr><td class="in">⚡▲ ${x[0]}</td><td class="v in">+${x[1].toFixed(1)}亿/${CFG.anomalyWin}m</td><td class="v empty">累计${fmt(x[2])}</td></tr>`);a+="</table>";}
-    if(aout.length){a+="<table>";aout.forEach(x=>a+=`<tr><td class="out">⚡▼ ${x[0]}</td><td class="v out">${x[1].toFixed(1)}亿/${CFG.anomalyWin}m</td><td class="v empty">累计${fmt(x[2])}</td></tr>`);a+="</table>";}
-    if(!ain.length&&!aout.length)a=`<div class="empty">${tradingNow(now)?"近期无超阈异动":"非盘中，不计异动"}</div>`;
-    document.getElementById("anom").innerHTML=a;
+    const [ain,aout]=renderAnom();
 
     // 概览卡片（同样取全部板块口径）
     const topIn=all.length?all[0]:null, topOut=all.length?all[all.length-1]:null;
@@ -514,6 +561,18 @@ function syncKind(){
 }
 document.getElementById("kindBtn").onclick=()=>{CFG.industry=!CFG.industry;HISTORY.length=0;syncKind();refresh();};
 document.getElementById("refreshBtn").onclick=()=>{if(!busy)refresh();};
+/* 刷新间隔可配置：localStorage 持久化，切换即时生效 */
+(function(){const ivlSel=document.getElementById("ivlSel");
+  const saved=parseInt(localStorage.getItem("sf_ivl"));
+  if(saved&&[30,60,120,180,300,600,900].includes(saved)){CFG.intervalSec=saved;ivlSel.value=saved;}
+  ivlSel.onchange=()=>{CFG.intervalSec=parseInt(ivlSel.value)||300;localStorage.setItem("sf_ivl",CFG.intervalSec);nextAt=Date.now()+CFG.intervalSec*1000;renderAnom();};
+})();
+/* 异动排序 tab：窗口变化 / 5m变化 / 累计变化，切换即时重排并持久化 */
+(function(){const tabs=document.querySelectorAll("#anomTabs button");
+  tabs.forEach(x=>x.classList.toggle("active",x.dataset.sort===SORT_MODE));
+  tabs.forEach(b=>b.onclick=()=>{SORT_MODE=b.dataset.sort;localStorage.setItem("sf_anomsort",SORT_MODE);
+    tabs.forEach(x=>x.classList.toggle("active",x===b));renderAnom();});
+})();
 
 /* 白名单：输入加入 / 点榜单★ / 点 chip 移除 / 清空，存本地、即时生效 */
 function renderWl(){
