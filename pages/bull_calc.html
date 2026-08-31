@@ -2015,62 +2015,31 @@
                 lastRefreshTime.value = `${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
             };
 
-            // 本地行情代理（优先）：qt.gtimg.cn 返回 GBK，UTF-8 页面直接 JSONP 会执行失败，
-            // 故优先走 http://127.0.0.1:8777（GBK→UTF-8 的 JSON，带 CORS，外部浏览器可直接 fetch）。
-            const QUOTE_PROXY_BASE = 'http://127.0.0.1:8777';
-            const tryQuoteProxy = (codes, done) => {
-                fetch(`${QUOTE_PROXY_BASE}/quote?codes=${encodeURIComponent(codes.join(','))}`)
-                    .then(r => { if (!r.ok) throw new Error('proxy ' + r.status); return r.json(); })
-                    .then(j => {
-                        if (j && j.ok && j.data) {
-                            for (const code in j.data) {
-                                if (Object.prototype.hasOwnProperty.call(j.data, code)) {
-                                    window['v_' + code] = j.data[code];
-                                }
-                            }
-                        }
-                        done(true);
-                    })
-                    .catch(() => done(false));
-            };
-
+            // qt.gtimg.cn 返回 GBK 编码，UTF-8 页面必须显式 charset=gbk 才能正确解码。
+            // 外部浏览器（file://）直连即可，无需起本地服务。
             const requestQuoteData = (codes, scriptId, onLoaded, onError) => {
                 if (!codes || codes.length === 0) {
                     if (onLoaded) onLoaded();
                     return;
                 }
-                let finished = false;
-                const finish = (ok) => {
-                    if (finished) return;
-                    finished = true;
-                    if (ok) {
-                        if (onLoaded) onLoaded();
-                    } else {
-                        // 代理失败 → 兜底 JSONP（显式 charset=gbk，避免 UTF-8 页面误解码）
-                        const oldScript = document.getElementById(scriptId);
-                        if (oldScript) oldScript.remove();
-                        const script = document.createElement('script');
-                        script.id = scriptId;
-                        script.charset = 'gbk';
-                        script.src = `https://qt.gtimg.cn/q=${codes.join(',')}`;
-                        const done2 = (ok2) => {
-                            script.remove();
-                            if (ok2) {
-                                if (onLoaded) onLoaded();
-                            } else {
-                                if (typeof ElMessage !== 'undefined') {
-                                    ElMessage.warning('行情获取失败：请先启动本地行情代理（python monitor/quote_proxy.py），或检查网络后刷新');
-                                }
-                                if (onError) onError();
-                            }
-                        };
-                        script.onerror = () => done2(false);
-                        script.onload = () => done2(true);
-                        document.body.appendChild(script);
+                const oldScript = document.getElementById(scriptId);
+                if (oldScript) oldScript.remove();
+                const script = document.createElement('script');
+                script.id = scriptId;
+                script.charset = 'gbk';
+                script.src = `https://qt.gtimg.cn/q=${codes.join(',')}`;
+                script.onerror = () => {
+                    script.remove();
+                    if (typeof ElMessage !== 'undefined') {
+                        ElMessage.warning('行情获取失败：请检查网络后刷新（行情接口 qt.gtimg.cn）');
                     }
+                    if (onError) onError();
                 };
-                // 1) 首选本地代理
-                tryQuoteProxy(codes, finish);
+                script.onload = () => {
+                    if (onLoaded) onLoaded();
+                    script.remove();
+                };
+                document.body.appendChild(script);
             };
 
             const fetchMarketIndexes = () => {

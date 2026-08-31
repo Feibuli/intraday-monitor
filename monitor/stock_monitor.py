@@ -2,10 +2,9 @@
 # -*- coding: utf-8 -*-
 """
 股价监控系统 v2
-- 股票来源（二选一）：
-  1) 命令行 --stock 参数（可重复）：由牛股计算器「启动监控」按钮根据网页表格数据直接拼出，
-     格式：--stock "code,name,high,low,cost,monitor,highDate"
-  2) 回退：导入 watchlist.csv（自选股列表，由牛股计算器页面导出）
+- 股票来源：命令行 --stock 参数（可重复），由牛股计算器「启动监控」按钮根据网页表格数据直接拼出，
+  格式：--stock "code,name,high,low,cost,monitor,highDate"
+  （watchlist.csv 仅作牛股计算器的导入/导出文件，不再作为监控数据源）
 - 日内压力/支撑突破时推送（状态变化才告警）
 - 持续监控，达到目标时通过企业微信推送
 """
@@ -13,7 +12,6 @@
 import sys
 sys.stdout.reconfigure(line_buffering=True)  # 强制行缓冲，确保nohup后台运行时日志实时写入
 
-import csv
 import time
 import os
 from datetime import datetime, timedelta
@@ -53,7 +51,6 @@ _load_dotenv()
 # 企业微信机器人 webhook 地址：优先读环境变量，其次读 monitor/.env 的 WECHAT_WEBHOOK_URL，切勿硬编码密钥入库。
 # 获取方式：企业微信群 → 添加群机器人 → 复制 Webhook 地址，写入 monitor/.env 的 WECHAT_WEBHOOK_URL。
 WEBHOOK_URL = os.environ.get("WECHAT_WEBHOOK_URL", "")
-CSV_FILE = "watchlist.csv"  # 自选股列表（由牛股计算器页面导出，放本 monitor/ 目录下）
 CHECK_INTERVAL = 60  # 检查间隔（秒）
 
 # 股票数据API
@@ -282,47 +279,6 @@ def count_trading_days(start_ts: int, end_ts: int) -> int:
     return max(0, count - 1)  # 减1是因为start当天不计入
 
 
-# ===================== CSV导入 =====================
-def load_strategy_csv(filepath: str) -> List[Dict]:
-    """导入策略CSV文件"""
-    stocks = []
-    if not os.path.exists(filepath):
-        return stocks
-    
-    encodings = ['utf-8-sig', 'utf-8', 'gbk', 'gb2312']
-    for encoding in encodings:
-        try:
-            with open(filepath, 'r', encoding=encoding) as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    code = format_code(row.get('代码', ''))
-                    if not code:
-                        continue
-                    # 解析新高日期
-                    new_high_date = row.get('新高日期', '')
-                    new_high_ts = 0
-                    if new_high_date:
-                        try:
-                            new_high_ts = int(datetime.strptime(new_high_date, "%Y-%m-%d").timestamp())
-                        except:
-                            pass
-                    
-                    stocks.append({
-                        'code': code,
-                        'name': row.get('名称', ''),
-                        'high': float(row.get('阶段顶部', 0) or 0),
-                        'low': float(row.get('阶段底部', 0) or 0),
-                        'cost': float(row.get('成本价', 0) or 0),
-                        'new_high_date': new_high_date,
-                        'new_high_ts': new_high_ts,
-                        'monitor': row.get('监控', '1').strip() != '0',
-                    })
-            return stocks
-        except Exception:
-            continue
-    return stocks
-
-
 # ===================== 命令行 --stock 参数解析 =====================
 def parse_stock_arg(arg: str) -> Optional[Dict]:
     """解析命令行传入的单只股票参数。
@@ -332,7 +288,7 @@ def parse_stock_arg(arg: str) -> Optional[Dict]:
     例：
         sh600519,贵州茅台,1800.5,1500.2,1600.0,1,2026-08-01
     其中 high/low/cost 缺省或空按 0 处理；monitor 缺省为 1（监控）；
-    highDate 缺省为空。与 load_strategy_csv 返回的字典结构保持一致。
+    highDate 缺省为空。返回的字典结构与 StockMonitor 内部使用的一致。
     """
     if not arg or not arg.strip():
         return None
@@ -379,8 +335,7 @@ def parse_stock_arg(arg: str) -> Optional[Dict]:
 
 # ===================== 监控核心 =====================
 class StockMonitor:
-    def __init__(self, csv_file: str = None, stocks: List[Dict] = None, interval: int = None):
-        self.csv_file = csv_file
+    def __init__(self, stocks: List[Dict] = None, interval: int = None):
         self.stocks = list(stocks) if stocks else []
         self.check_interval = interval if interval and interval > 0 else CHECK_INTERVAL
         self.states = {}        # 记录每个股票的状态 {code: "上涨中"/"盘整中"/"下跌中"}
@@ -392,13 +347,7 @@ class StockMonitor:
         self.limit_baselines = {}  # 记录封单额基准（万元）{code: 万元}
     
     def load_stocks(self):
-        # 命令行直接传入则优先使用；否则回退到读取 CSV
-        if self.stocks:
-            return len(self.stocks) > 0
-        if self.csv_file:
-            self.stocks = load_strategy_csv(self.csv_file)
-            return len(self.stocks) > 0
-        return False
+        return len(self.stocks) > 0
     
     def check_stock(self, stock: Dict):
         code = stock['code']
@@ -814,28 +763,14 @@ if __name__ == "__main__":
         if d:
             cli_stocks.append(d)
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    if not cli_stocks:
+        print(f"[错误] 未传入任何股票。请先在牛股计算器页面勾选「推送」并点击「启动监控」按钮，")
+        print(f"        该按钮会按网页表格直接生成带 --stock 参数的启动命令（无需 watchlist.csv）。")
+        print(f"        用法示例：python stock_monitor.py --stock \"sh600519,贵州茅台,1800.5,1500.2,1600,1,2026-08-01\"")
+        sys.exit(1)
 
-    if cli_stocks:
-        # 优先使用命令行直接传入的股票（来自牛股计算器网页表格）
-        print(f"[模式] 使用命令行传入的 {len(cli_stocks)} 只股票（不读取 watchlist.csv）")
-        monitor = StockMonitor(stocks=cli_stocks, interval=args.interval)
-    else:
-        # 回退：导入 watchlist.csv
-        csv_path = os.path.join(script_dir, CSV_FILE)
-        # 小白友好：缺少 watchlist.csv 时，自动从示例模板生成一份，确保开箱即可运行
-        if not os.path.exists(csv_path):
-            example_path = os.path.join(script_dir, "watchlist.example.csv")
-            if os.path.exists(example_path):
-                import shutil
-                shutil.copy(example_path, csv_path)
-                print(f"[提示] 未找到 {CSV_FILE}，已自动用示例模板生成 {csv_path}")
-                print(f"        如需自定义自选股，可编辑该文件，或在牛股计算器中导出后覆盖。")
-            else:
-                print(f"[警告] 未找到 {CSV_FILE}（应在 {script_dir} 下），且示例模板缺失。")
-                print(f"         请先准备自选股列表（在牛股计算器中导出 watchlist.csv 放到 monitor/ 目录）。")
-
-        monitor = StockMonitor(csv_path, interval=args.interval)
+    print(f"[模式] 使用命令行传入的 {len(cli_stocks)} 只股票（来自牛股计算器网页表格）")
+    monitor = StockMonitor(stocks=cli_stocks, interval=args.interval)
 
     try:
         monitor.start()

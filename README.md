@@ -94,12 +94,12 @@ cp monitor/.env.example monitor/.env
 
 > **未配置 Webhook 也能正常运行**，只是不会推送消息（仅本地日志）。密钥走环境变量，`.env` 已被 `.gitignore` 忽略，**绝不入库**。
 
-### 3. 准备自选股列表
+### 3. 自选股从哪来（无需手动准备文件）
 
-- 从牛股计算器页面点击「导出」得到 `watchlist.csv`，放到 `monitor/` 目录；或
-- 复制模板：`cp monitor/watchlist.example.csv monitor/watchlist.csv` 后按格式填写。
+- 监控的股票**直接来自牛股计算器页面的表格**：在页面勾选每只股票的「推送」，点「启动监控」按钮，页面会把当前表格数据按 `--stock` 参数拼进启动命令，**无需导出/准备任何 csv 文件**。
+- `watchlist.csv` 仅作为牛股计算器页面内的**导入/导出**文件（「导出」下载、「导入」读取），不再作为监控的数据源。可用 `monitor/watchlist.example.csv` 作为导入样例参考格式。
 
-> `watchlist.csv` 含个人持仓/自选，已被 `.gitignore` 忽略，**请勿提交真实数据**。
+> 若直接手动运行 `python monitor/stock_monitor.py` 而未带 `--stock` 参数，会明确报错提示去用页面按钮。
 
 ### 4. 运行（在页面里点「启动监控」即可）
 
@@ -202,7 +202,7 @@ NGA 对未登录（游客）访问 `read.php` 会返回「权限不足」（erro
 ## 安全与隐私
 
 - 企业微信 Webhook 地址通过环境变量 `WECHAT_WEBHOOK_URL` 读取，配置在 `monitor/.env`（已被忽略），**绝不硬编码入库**。
-- 自选股 `monitor/watchlist.csv` 含个人数据，已被 `.gitignore` 忽略。
+- 牛股计算器的 `watchlist.csv` 导入/导出文件含个人数据，已被 `.gitignore` 忽略。
 - NGA 登录 Cookie（UID/CID）由页面随启动命令传入后端用于抓取，仅本机、本次运行有效，**绝不入库、不上传**。
 - 所有脚本与看板均为本地运行，不存在远端收集。
 
