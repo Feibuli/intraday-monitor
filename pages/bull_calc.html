@@ -1258,16 +1258,36 @@
                 const here = fileUrlToFsPath(location.href);            // .../intraday-monitor/pages/bull_calc.html
                 const pagesDir = here.replace(/[\\/][^\\/]*$/, '');       // .../intraday-monitor/pages
                 const repoDir = pagesDir.replace(/[\\/][^\\/]*$/, '');   // .../intraday-monitor
+
+                // 直接从网页表格读取「推送」勾选中的股票，拼成 --stock 参数，不再依赖导出的 watchlist.csv
+                const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+                const monitoredRows = (tableData.value || []).filter(r => r && r.monitor !== false && r.fullCode);
+                if (monitoredRows.length === 0) {
+                    ElMessage.warning('没有勾选「推送」的股票，无法启动监控。请在表格中至少勾选一只股票的「推送」复选框。');
+                    return;
+                }
+                const stockArgs = monitoredRows.map(r => {
+                    const code = (r.fullCode || '').trim();
+                    const name = (r.name || '').trim();
+                    const high = num(r.high);
+                    const low = num(r.low);
+                    const cost = num(r.cost);
+                    const monitor = r.monitor !== false ? 1 : 0;
+                    const highDate = (r.highDate || '').trim();
+                    const val = `${code},${name},${high},${low},${cost},${monitor},${highDate}`;
+                    return `--stock "${val}"`;
+                }).join(' ');
+
                 const isWin = /Win/i.test(navigator.platform) || /Windows/i.test(navigator.userAgent);
                 let cmd, tip;
                 if (isWin) {
                     const psPath = repoDir + '/monitor/start_monitor.ps1';   // 回退到仓库根再进 monitor/
-                    cmd = `powershell -ExecutionPolicy Bypass -File "${psPath}"`;
-                    tip = '启动命令已复制 ✅ 打开 cmd（命令提示符）→ 右键粘贴 → 回车，依赖会自动安装并启动监控';
+                    cmd = `powershell -ExecutionPolicy Bypass -File "${psPath}" ${stockArgs}`;
+                    tip = `启动命令已复制 ✅ 已按网页表格 ${monitoredRows.length} 只「推送」股票生成（无需导出 watchlist.csv）。打开 cmd（命令提示符）→ 右键粘贴 → 回车即可启动监控`;
                 } else {
                     const shPath = repoDir + '/monitor/start_monitor.sh';
-                    cmd = `bash "${shPath}"`;
-                    tip = '启动命令已复制 ✅ 打开终端 → 粘贴 → 回车，依赖会自动安装并启动监控';
+                    cmd = `bash "${shPath}" ${stockArgs}`;
+                    tip = `启动命令已复制 ✅ 已按网页表格 ${monitoredRows.length} 只「推送」股票生成（无需导出 watchlist.csv）。打开终端 → 粘贴 → 回车即可启动监控`;
                 }
                 navigator.clipboard.writeText(cmd).then(() => {
                     ElMessage({
@@ -1278,7 +1298,7 @@
                     });
                 }).catch(() => {
                     ElMessageBox.alert(
-                        `<div style="font-size:12px;margin-bottom:8px;color:#94a3b8;">手动复制以下命令，打开命令行（cmd / 终端）粘贴并回车即可，依赖会自动安装：</div><pre style="white-space:pre-wrap;word-break:break-all;font-size:12px;color:#a8d8ff;background:#0d1b2a;padding:10px;border-radius:6px;user-select:all;">${cmd}</pre>`,
+                        `<div style="font-size:12px;margin-bottom:8px;color:#94a3b8;">手动复制以下命令，打开命令行（cmd / 终端）粘贴并回车即可启动监控（已按网页表格生成，无需 watchlist.csv）：</div><pre style="white-space:pre-wrap;word-break:break-all;font-size:12px;color:#a8d8ff;background:#0d1b2a;padding:10px;border-radius:6px;user-select:all;">${cmd}</pre>`,
                         '启动监控脚本',
                         { dangerouslyUseHTMLString: true, confirmButtonText: '关闭' }
                     );

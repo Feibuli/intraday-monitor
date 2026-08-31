@@ -47,7 +47,7 @@ echo "说明: 监控脚本为纯 Python 标准库实现，无需 pip 安装任�
 
 echo ""
 echo "启动监控 ..."
-"$PY" "$SCRIPT_DIR/stock_monitor.py"
+"$PY" "$SCRIPT_DIR/stock_monitor.py" "$@"
 EXIT_CODE=$?
 echo ""
 echo "Monitor stopped."

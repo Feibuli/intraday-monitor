@@ -58,11 +58,11 @@ try {
     }
 }
 
-# Step 2: Start monitor
+# Step 2: Start monitor（将脚本收到的额外参数透传给 stock_monitor.py，例如牛股计算器拼出的 --stock ...）
 Write-Host ""
 Write-Host "[2/2] Starting stock monitor..."
 Set-Location $workDir
-& $pythonExe "$workDir\stock_monitor.py"
+& $pythonExe "$workDir\stock_monitor.py" @args
 $monitorExit = $LASTEXITCODE
 
 Write-Host ""

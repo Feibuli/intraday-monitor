@@ -2,7 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 股价监控系统 v2
-- 导入 watchlist.csv（自选股列表，由牛股计算器页面导出）
+- 股票来源（二选一）：
+  1) 命令行 --stock 参数（可重复）：由牛股计算器「启动监控」按钮根据网页表格数据直接拼出，
+     格式：--stock "code,name,high,low,cost,monitor,highDate"
+  2) 回退：导入 watchlist.csv（自选股列表，由牛股计算器页面导出）
 - 日内压力/支撑突破时推送（状态变化才告警）
 - 持续监控，达到目标时通过企业微信推送
 """
@@ -22,6 +25,7 @@ from typing import Dict, List, Optional
 import json
 import urllib.request
 import urllib.error
+import argparse
 
 
 # ===================== 极简 .env 加载器（零依赖） =====================
@@ -319,11 +323,66 @@ def load_strategy_csv(filepath: str) -> List[Dict]:
     return stocks
 
 
+# ===================== 命令行 --stock 参数解析 =====================
+def parse_stock_arg(arg: str) -> Optional[Dict]:
+    """解析命令行传入的单只股票参数。
+
+    格式（逗号分隔，顺序固定）：
+        code,name,high,low,cost,monitor,highDate
+    例：
+        sh600519,贵州茅台,1800.5,1500.2,1600.0,1,2026-08-01
+    其中 high/low/cost 缺省或空按 0 处理；monitor 缺省为 1（监控）；
+    highDate 缺省为空。与 load_strategy_csv 返回的字典结构保持一致。
+    """
+    if not arg or not arg.strip():
+        return None
+    parts = [p.strip() for p in arg.split(',')]
+    if len(parts) < 1 or not parts[0]:
+        return None
+    code = format_code(parts[0])
+    if not code:
+        return None
+
+    def _f(idx, default=0.0):
+        if idx < len(parts) and parts[idx] not in ('', None):
+            try:
+                return float(parts[idx])
+            except (ValueError, TypeError):
+                return default
+        return default
+
+    name = parts[1] if len(parts) > 1 else ''
+    high = _f(2)
+    low = _f(3)
+    cost = _f(4)
+    monitor = True
+    if len(parts) > 5 and parts[5] not in ('', None):
+        monitor = parts[5].strip() != '0'
+    new_high_date = parts[6] if len(parts) > 6 else ''
+    new_high_ts = 0
+    if new_high_date:
+        try:
+            new_high_ts = int(datetime.strptime(new_high_date, "%Y-%m-%d").timestamp())
+        except Exception:
+            pass
+    return {
+        'code': code,
+        'name': name,
+        'high': high,
+        'low': low,
+        'cost': cost,
+        'new_high_date': new_high_date,
+        'new_high_ts': new_high_ts,
+        'monitor': monitor,
+    }
+
+
 # ===================== 监控核心 =====================
 class StockMonitor:
-    def __init__(self, csv_file: str):
+    def __init__(self, csv_file: str = None, stocks: List[Dict] = None, interval: int = None):
         self.csv_file = csv_file
-        self.stocks = []
+        self.stocks = list(stocks) if stocks else []
+        self.check_interval = interval if interval and interval > 0 else CHECK_INTERVAL
         self.states = {}        # 记录每个股票的状态 {code: "上涨中"/"盘整中"/"下跌中"}
         self.triggered = set()  # 已触发止损/新高的股票（每日重置）
         self.high_dates = {}    # 记录每个股票的新高时间戳 {code: timestamp}
@@ -333,8 +392,13 @@ class StockMonitor:
         self.limit_baselines = {}  # 记录封单额基准（万元）{code: 万元}
     
     def load_stocks(self):
-        self.stocks = load_strategy_csv(self.csv_file)
-        return len(self.stocks) > 0
+        # 命令行直接传入则优先使用；否则回退到读取 CSV
+        if self.stocks:
+            return len(self.stocks) > 0
+        if self.csv_file:
+            self.stocks = load_strategy_csv(self.csv_file)
+            return len(self.stocks) > 0
+        return False
     
     def check_stock(self, stock: Dict):
         code = stock['code']
@@ -695,7 +759,7 @@ class StockMonitor:
                 auction_sent_date[0] = today
                 print(f"[{now}] 竞价情况已推送，结果: {result}")
 
-        print(f"运行中，每{CHECK_INTERVAL}秒检查... Ctrl+C停止")
+        print(f"运行中，每{self.check_interval}秒检查... Ctrl+C停止")
 
         # 信号处理：退出时清理PID文件
         import atexit
@@ -728,32 +792,51 @@ class StockMonitor:
                 except Exception:
                     pass
                 last_heartbeat = now
-            time.sleep(CHECK_INTERVAL)
+            time.sleep(self.check_interval)
 
 
 # ===================== 主程序 =====================
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="股价监控系统 v2")
+    parser.add_argument("--stock", action="append", default=[], metavar="code,name,high,low,cost,monitor,highDate",
+                        help="单只股票参数，可重复；由牛股计算器「启动监控」按网页表格直接生成，无需 watchlist.csv。例: --stock \"sh600519,贵州茅台,1800.5,1500.2,1600,1,2026-08-01\"")
+    parser.add_argument("--interval", type=int, default=0, metavar="秒",
+                        help="检查间隔秒数（覆盖默认配置）")
+    args = parser.parse_args()
+
     print("="*50)
     print("股价监控系统 v2")
     print("="*50)
-    
+
+    cli_stocks = []
+    for raw in args.stock:
+        d = parse_stock_arg(raw)
+        if d:
+            cli_stocks.append(d)
+
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    csv_path = os.path.join(script_dir, CSV_FILE)
 
-    # 小白友好：缺少 watchlist.csv 时，自动从示例模板生成一份，确保开箱即可运行
-    if not os.path.exists(csv_path):
-        example_path = os.path.join(script_dir, "watchlist.example.csv")
-        if os.path.exists(example_path):
-            import shutil
-            shutil.copy(example_path, csv_path)
-            print(f"[提示] 未找到 {CSV_FILE}，已自动用示例模板生成 {csv_path}")
-            print(f"        如需自定义自选股，可编辑该文件，或在牛股计算器中导出后覆盖。")
-        else:
-            print(f"[警告] 未找到 {CSV_FILE}（应在 {script_dir} 下），且示例模板缺失。")
-            print(f"         请先准备自选股列表（在牛股计算器中导出 watchlist.csv 放到 monitor/ 目录）。")
+    if cli_stocks:
+        # 优先使用命令行直接传入的股票（来自牛股计算器网页表格）
+        print(f"[模式] 使用命令行传入的 {len(cli_stocks)} 只股票（不读取 watchlist.csv）")
+        monitor = StockMonitor(stocks=cli_stocks, interval=args.interval)
+    else:
+        # 回退：导入 watchlist.csv
+        csv_path = os.path.join(script_dir, CSV_FILE)
+        # 小白友好：缺少 watchlist.csv 时，自动从示例模板生成一份，确保开箱即可运行
+        if not os.path.exists(csv_path):
+            example_path = os.path.join(script_dir, "watchlist.example.csv")
+            if os.path.exists(example_path):
+                import shutil
+                shutil.copy(example_path, csv_path)
+                print(f"[提示] 未找到 {CSV_FILE}，已自动用示例模板生成 {csv_path}")
+                print(f"        如需自定义自选股，可编辑该文件，或在牛股计算器中导出后覆盖。")
+            else:
+                print(f"[警告] 未找到 {CSV_FILE}（应在 {script_dir} 下），且示例模板缺失。")
+                print(f"         请先准备自选股列表（在牛股计算器中导出 watchlist.csv 放到 monitor/ 目录）。")
 
-    monitor = StockMonitor(csv_path)
-    
+        monitor = StockMonitor(csv_path, interval=args.interval)
+
     try:
         monitor.start()
     except KeyboardInterrupt:
