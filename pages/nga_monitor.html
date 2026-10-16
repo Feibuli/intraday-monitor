@@ -123,6 +123,8 @@
         <label>NGA UID<small>ngaPassportUid，登录 NGA 后从浏览器 Cookie 获取</small><input id="f_uid" placeholder="NGA UID" autocomplete="off"></label>
         <label>NGA CID<small>ngaPassportCid</small><input id="f_cid" placeholder="NGA CID" autocomplete="off"></label>
         <label>刷新频率（秒）<input id="f_interval" type="number" value="60" min="5"></label>
+        <label>启动时回溯条数<small>启动时每个作者最多往前翻多少条，碰到抓过的就停；0=不回溯</small><input id="f_backfill" type="number" value="50" min="0"></label>
+        <label>推送时间门槛（小时）<small>补回的发言超过这个岁数只入库不推送；0=不限</small><input id="f_pushage" type="number" value="168" min="0"></label>
       </div>
 
       <h2 style="margin-top:16px">📌 监控目标（多个帖子可分别添加）</h2>
@@ -163,6 +165,8 @@
 
   const $ = id => document.getElementById(id);
   const f_uid=$('f_uid'), f_cid=$('f_cid'), f_int=$('f_interval');
+  const f_bf=$('f_backfill'), f_pa=$('f_pushage');
+  const BF_DEFAULT=50, PA_DEFAULT=168;
   const targetsEl=$('targets'), addTargetBtn=$('addTarget');
   const startBtn=$('startBtn'), refreshBtn=$('refreshBtn');
   const cfgBody=$('cfgBody'), toggleBtn=$('toggleCfg');
@@ -184,7 +188,7 @@
   function saveCfg(){
     try{
       const o={ uid:f_uid.value.trim(), cid:f_cid.value.trim(),
-        interval:f_int.value,
+        interval:f_int.value, backfill:f_bf.value, pushage:f_pa.value,
         targets: targets.map(t=>({tid:t.tid, aids:t.aids})),
         collapsed: cfgBody.classList.contains('collapsed') };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(o));
@@ -196,6 +200,8 @@
       const o=JSON.parse(s);
       f_uid.value=o.uid||''; f_cid.value=o.cid||'';
       f_int.value=o.interval||'60';
+      f_bf.value=(o.backfill===undefined||o.backfill==='')?BF_DEFAULT:o.backfill;
+      f_pa.value=(o.pushage===undefined||o.pushage==='')?PA_DEFAULT:o.pushage;
       targets = Array.isArray(o.targets) ? o.targets.map(t=>({tid:String(t.tid||''), aids:String(t.aids||'')})) : [];
       if(!targets.length) targets=[{tid:'',aids:''}];
       if(o.collapsed){ cfgBody.classList.add('collapsed'); toggleBtn.textContent='展开 ▼'; }
@@ -258,6 +264,11 @@
       if(t.tid && t.aids) cmd+=' --target='+t.tid+':'+t.aids;
     }
     cmd+=' --interval='+Math.max(5,parseInt(f_int.value)||60);
+    // 下面两项只在改过默认值时才写进命令，保持复制出来的命令尽量短
+    const bf=parseInt(f_bf.value);
+    if(!isNaN(bf)&&bf!==BF_DEFAULT) cmd+=' --backfill-posts='+Math.max(0,bf);
+    const pa=parseInt(f_pa.value);
+    if(!isNaN(pa)&&pa!==PA_DEFAULT) cmd+=' --push-max-age-hours='+Math.max(0,pa);
     return cmd;
   }
   const LAUNCH_TIP='启动命令已复制 ✅ 打开 cmd（命令提示符）→ 右键粘贴 → 回车，即可启动监控并推送企微';
@@ -286,7 +297,7 @@
   addTargetBtn.addEventListener('click',()=>{ targets.push({tid:'',aids:''}); renderTargets(); validate(); });
 
   // 静态字段（UID/CID/频率）也要实时触发校验与存盘
-  [f_uid,f_cid,f_int].forEach(el=>el.addEventListener('input',()=>{ saveCfg(); validate(); }));
+  [f_uid,f_cid,f_int,f_bf,f_pa].forEach(el=>el.addEventListener('input',()=>{ saveCfg(); validate(); }));
 
   async function connect(){
     BACKEND=await resolveBackend();
