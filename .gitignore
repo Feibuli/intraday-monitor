@@ -16,8 +16,9 @@ monitor/*.pid
 *.tmp
 
 # ---------- NGA 大佬监控（本地缓存，勿提交） ----------
+# 通配覆盖：主存档 + 轮转备份 .bakN + 损坏留存 .corrupt-* + 覆盖嫌疑留存 .suspect-*
 monitor/nga_posts.json
-monitor/nga_posts.txt
+monitor/nga_posts.*
 monitor/nga_debug_last.txt
 monitor/nga_monitor.pid
 

@@ -69,8 +69,56 @@ PAGE_PATH = os.path.join(BASE_DIR, "..", "pages", "nga_monitor.html")
 POSTS_CACHE_PATH = os.path.join(BASE_DIR, "nga_posts.json")   # 最近发言缓存（机器格式，页面数据源；gitignored）
 DEBUG_PATH = os.path.join(BASE_DIR, "nga_debug_last.txt")     # 解析失败时的原始响应（gitignored）
 
+# ---- 缓存防丢保护 ----
+# 历史教训：nga_posts.json 曾发生「3000+ 条历史悄无声息变成 355 条」。原因是
+# 存档只有单份文件、覆盖式写入，且 load_cache 读取失败时只打印一行就当空库启动，
+# 于是下一轮 save_cache 用少量数据整体覆盖，连坏掉的那份都救不回来。
+# 以下三重保护针对此设计：
+#   1) 轮转备份：写新档前定期把旧档存成 .bak1~.bak3，写坏了还能回滚
+#   2) 现场保护：读取失败不删除、不静默清空，改名留存 .corrupt-<时间戳> 并从备份恢复
+#   3) 覆盖熔断：内存条数远少于磁盘条数时拒绝覆盖，另存 .suspect-<时间戳> 并告警
+CACHE_BACKUP_KEEP = 3          # 保留几份轮转备份
+CACHE_BACKUP_INTERVAL = 1800   # 两次轮转备份的最小间隔（秒），避免每分钟复制 386KB
+CACHE_GUARD_RATIO = 0.5        # 内存条数低于磁盘条数的此比例时触发熔断，拒绝覆盖
+
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+
+# 回溯补抓的翻页上限：从末页-1 往前最多翻 5 页（约 100 条发言）。
+# 正常情况会在碰到「已抓过的发言」时提前停止；此上限只在历史记录缺失时兜底。
+BACKFILL_MAX_PAGES = 5
+
+# ⚠️ 回溯翻页必须节流（2026-10-16 实测）：NGA 对短时间内的请求数有风控，
+# 超过后会对 read.php 返回 302 重定向循环（urllib 跟随即报「infinite loop」）。
+# 实测常规 14 个组合轮询（14 次/分钟）是安全的，但紧接着连翻 70 页会让
+# 后续请求全部 302——即回溯自己把自己打挂，还会连累下一轮常规抓取。
+# 所以：翻页之间强制间隔，且每轮回溯只花固定预算（几页），剩下的下一轮接着翻。
+BACKFILL_PAGE_DELAY = 4.0       # 每次翻页前的等待秒数
+BACKFILL_MAX_REQUESTS = 2       # 每轮回溯最多发几次请求（含常规抓取，总量仍远低于风控线）
+
+# 常规轮询里每个 (帖子, 作者) 之间的间隔。实测（2026-10-16）：风控看的是**速率**——
+# 一口气 2 次/秒连发十几次必吃 302，摊成 0.5 次/秒则完全没事。因此宁可把一轮的
+# 抓取摊到 ~20 秒发完，也不要挤在几秒内打过去。
+FETCH_COMBO_DELAY = 1.5
+
+# 回溯补抓的执行频率：每 BACKFILL_EVERY_ROUNDS 轮做一次（60 秒间隔 ≈ 每 30 分钟）。
+# 为什么不能每轮都翻：实测「翻旧页」比抓末页更容易触发 NGA 风控 302，每轮都翻会
+# 让回溯请求长期处于被限流状态（补不回东西还浪费额度）。半小时一次、每次只翻
+# 两页，既够慢慢把历史补齐，又不影响实时抓取。
+BACKFILL_EVERY_ROUNDS = 30
+# 启动第一轮多给一点预算，先把停机期间的漏抓补回来
+BACKFILL_FIRST_ROUND_REQUESTS = 4
+
+# 推送的「新旧」判据（2026-10-16 加，血泪教训）：
+# 回溯补抓只看「pid 是否在缓存里」，一旦存档缺失（被清/损坏/换机器），
+# 往前翻 5 页翻出来的全是几个月前的老帖，pid 都不在缓存里 → 被当成新发言
+# 全量推送，企微被 9 月的发言刷屏。
+# 因此推送前必须再用时间判一道：只推「比该作者已知最新一条更新」的发言，
+# 更老的只入库、不推送（页面照样能看）。断档补回的停机期发言 ts 一定晚于
+# 停机前最后一条，仍会正常推送。
+# 二级硬下限：ts 早于「启动时刻 - N 小时」的一律不推，防止 ts 基准异常时
+# 又把陈年旧帖放出来。
+PUSH_MAX_AGE_HOURS = 168      # 7 天；超过这个岁数的发言只入库不推送
 
 DEFAULT_CONFIG = {
     "targets": [{"tid": 47207407, "authorids": [150058]}],
@@ -217,7 +265,75 @@ def clean_text(s):
 
 
 # ===================== 解析器 =====================
-def parse_posts_json(raw, tid, authorid, thread_title="", users=None):
+def _page_seg(page):
+    """拼接 read.php 的 page 参数：能确定具体页码就用页码，否则用 9999。
+
+    NGA 会把过大的 page 参数夹紧到真实末页（实测请求 page=9999 即返回末页），
+    所以「拿不到具体页码」时给 9999 就等于末页，无需用 e。
+    NGA 的 authorid 过滤视图按时间正序分页（每页 20 条），新发言只追加到末页，
+    旧发言的页码不会前移——抓取时记录下来的页码对这条发言永久有效。
+    """
+    try:
+        n = int(page)
+        if n > 0:
+            return f"page={n}"
+    except (TypeError, ValueError):
+        pass
+    return "page=9999"
+
+
+def normalize_post_url(u):
+    """统一发言链接格式：去掉 #pid 锚点，page 用具体页码（拿不到则 9999）。
+
+    历史缓存里可能混着三种旧格式（无 page / page=e / 带 #pid），这里一次性归一。
+    """
+    if not u:
+        return u
+    base = u.split("#", 1)[0]                       # 去掉 #pid 锚点
+    base = re.sub(r"([?&])page=e\b", r"\1page=9999", base)   # page=e -> 9999
+    if "page=" not in base:
+        base = base + ("&" if "?" in base else "?") + "page=9999"
+    return base
+
+
+def _extract_page_from_lite(raw):
+    """从 lite JSON 响应里抽取当前页码（data.__PAGE）。
+
+    请求 page=9999 时 NGA 会夹紧到真实末页，并在 __PAGE 里回报实际页码。
+    """
+    try:
+        n = int(json.loads(raw, strict=False).get("data", {}).get("__PAGE"))
+        return n if n > 0 else None
+    except Exception:
+        return None
+
+
+def _extract_page_from_html(raw):
+    """从标准 HTML 页面抽取当前页码。
+
+    页面内嵌 `var __PAGE = {0:'...',1:总页数,2:当前页,3:每页条数}`，取索引 2；
+    取不到时退回用分页条的「上一页(N)」推算（当前页 = N+1）。
+    """
+    m = re.search(r"var __PAGE\s*=\s*\{([^}]*)\}", raw or "")
+    if m:
+        parts = [x.strip() for x in m.group(1).split(",")]
+        if len(parts) >= 3 and ":" in parts[2]:
+            try:
+                n = int(parts[2].split(":", 1)[1])
+                if n > 0:
+                    return n
+            except (TypeError, ValueError):
+                pass
+    m = re.search(r"上一页\((\d+)\)", raw or "")
+    if m:
+        try:
+            return int(m.group(1)) + 1
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def parse_posts_json(raw, tid, authorid, thread_title="", users=None, page=None):
     """解析 NGA lite JSON，返回帖子列表（含 pid/author名/authorid/ts/content/url/thread_title）。"""
     # strict=False：NGA lite 响应常在字符串值里夹带原始换行/制表等控制字符，
     # 默认 strict 模式会抛错导致整段解析失败、静默回退 HTML 后拿到 0 条。
@@ -252,15 +368,17 @@ def parse_posts_json(raw, tid, authorid, thread_title="", users=None):
             "content_text": clean_text(content),
             "tid": str(tid),
             "thread_title": thread_title,
-            "url": f"https://bbs.nga.cn/read.php?tid={tid}&authorid={authorid}#pid{pid}",
+            "url": f"https://bbs.nga.cn/read.php?tid={tid}&authorid={authorid}"
+                   f"&{_page_seg(page)}",
         })
     return posts
 
 
 class _PostHTMLParser(html.parser.HTMLParser):
     """NGA read.php HTML 兜底解析：以 name=\"pidxxx\" 锚点切分帖子块。"""
-    def __init__(self):
+    def __init__(self, page=None):
         super().__init__(convert_charrefs=True)
+        self.page = page
         self.posts = []
         self._in_post = False
         self._buf = []
@@ -328,15 +446,16 @@ class _PostHTMLParser(html.parser.HTMLParser):
                 self._in_content = False
                 self._content_parts = []
             self._cur["url"] = (f"https://bbs.nga.cn/read.php?tid={{tid}}"
-                                f"&authorid={self._cur['authorid']}#pid{self._cur['pid']}")
+                                f"&authorid={self._cur['authorid']}"
+                                f"&{_page_seg(self.page)}")
             self.posts.append(self._cur)
         self._cur = None
         self._in_post = False
 
 
-def parse_posts_html(raw, tid, authorid, thread_title="", users=None):
+def parse_posts_html(raw, tid, authorid, thread_title="", users=None, page=None):
     """兜底：解析 NGA read.php HTML。"""
-    p = _PostHTMLParser()
+    p = _PostHTMLParser(page=page)
     try:
         p.feed(raw)
         p._flush()
@@ -347,23 +466,23 @@ def parse_posts_html(raw, tid, authorid, thread_title="", users=None):
         post["authorid"] = post.get("authorid") or str(authorid)
         post["thread_title"] = thread_title
         post["url"] = (f"https://bbs.nga.cn/read.php?tid={tid}"
-                       f"&authorid={post['authorid']}#pid{post['pid']}")
+                       f"&authorid={post['authorid']}&{_page_seg(page)}")
     return p.posts
 
 
-def parse_posts(raw, tid, authorid, thread_title="", users=None):
+def parse_posts(raw, tid, authorid, thread_title="", users=None, page=None):
     """先试 lite JSON；若响应以 { 开头却解析失败（多为被截断），直接报错，
     不再回退 HTML——HTML 兜底仅适用于真正的网页响应，对截断的 JSON 回退只会
     静默得到 0 条，掩盖「取不到最新发言」的问题。"""
     raw = (raw or "").strip()
     if raw.startswith("{"):
         try:
-            return parse_posts_json(raw, tid, authorid, thread_title, users)
+            return parse_posts_json(raw, tid, authorid, thread_title, users, page=page)
         except NgaError:
             raise
         except Exception as e:
             raise NgaError(f"NGA 响应解析失败（可能响应被截断）：{e}")
-    return parse_posts_html(raw, tid, authorid, thread_title, users)
+    return parse_posts_html(raw, tid, authorid, thread_title, users, page=page)
 
 
 def _extract_thread_title(raw):
@@ -484,6 +603,16 @@ class NgaMonitor:
         self.thread_titles = {}   # tid(str) -> 帖子标题
         self.running = True
         self.startup_pushed = False  # 启动推送（开启/恢复通知）只发一次
+        self.backfilled = False      # 停机回溯补抓只在启动后第一轮做
+        self.rounds = 0              # 已执行的轮询轮数（用于定期回溯）
+        self.last_pages = {}         # (tid, 作者) -> 该作者末页页码（本轮抓取时更新）
+        self._bf_cursor = 0          # 回溯轮转游标：本轮从哪个目标开始
+        self._bf_next = {}           # (tid, 作者) -> 下次往前翻页的起点页码
+        self._bf_base = {}           # (tid, 作者) -> 已回溯覆盖到的最小页码
+        # 回溯补回的发言是否推送企微。仅在「清理历史存量断档」时用
+        # --no-backfill-push 关掉，避免一次性补回几十条把企微刷屏；
+        # 补回的发言照样入库，页面上照常可见。
+        self.no_backfill_push = bool((config or {}).get("no_backfill_push", False))
         self.load_cache()        # 启动时恢复历史发言，使「开始监控后爬下来的帖子」跨重启保留
 
     def load_cache(self):
@@ -494,11 +623,38 @@ class NgaMonitor:
         """
         try:
             if not os.path.exists(POSTS_CACHE_PATH):
+                self._cache_count_cached = 0
                 return
-            with open(POSTS_CACHE_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            posts = data.get("posts") or []
+            try:
+                with open(POSTS_CACHE_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                posts = data.get("posts") or []
+            except Exception as e:
+                # 关键：绝不静默丢缓存。先把坏文件原样留存，再尝试从轮转备份恢复。
+                corrupt = f"{POSTS_CACHE_PATH}.corrupt-{datetime.now():%Y%m%d_%H%M%S}.json"
+                try:
+                    os.replace(POSTS_CACHE_PATH, corrupt)
+                except Exception:
+                    pass
+                recovered = self._load_cache_from_backup()
+                self._alert(
+                    f"缓存读取失败：{e}\n"
+                    f"损坏文件已留存：{corrupt}\n"
+                    + (f"已自动从备份恢复 {recovered} 条。\n"
+                       if recovered else
+                       "所有备份均不可用，本次将从空库开始（历史发言需重新抓取）。\n")
+                    + "旧发言仍可用回溯补抓找回，不会立刻推送。"
+                )
+                return
             if not posts:
+                # 存档存在但一条都没有，同样可疑——先看看备份里有没有更多
+                recovered = self._load_cache_from_backup(silent_if_empty=True)
+                if recovered:
+                    self._alert(
+                        f"存档内发言数为 0，已自动从备份恢复 {recovered} 条。"
+                    )
+                    return
+                self._cache_count_cached = 0
                 return
             with self.lock:
                 self.posts = posts
@@ -507,56 +663,114 @@ class NgaMonitor:
                     # 用最新 clean_text 重新生成 content_text（修复历史缓存里被旧规则清空/带标记的脏数据）
                     if "content" in p:
                         p["content_text"] = clean_text(p.get("content", ""))
+                    # 历史链接归一：去掉 #pid 锚点，page 统一（无 page 或 page=e 都换成 9999）
+                    p["url"] = normalize_post_url(p.get("url") or "")
                     tt = p.get("thread_title")
                     if tt:
                         self.thread_titles[str(p.get("tid"))] = tt
                 if self.seen_pids:
                     self.seeded = True
-            print(f"[{datetime.now():%H:%M:%S}] 已从缓存恢复 {len(posts)} 条历史发言。")
+                self._cache_count_cached = len(posts)
+            span = ""
+            try:
+                ts = [p.get("ts", 0) for p in posts if p.get("ts")]
+                if ts:
+                    span = (f"（{datetime.fromtimestamp(min(ts)):%Y-%m-%d %H:%M} ~ "
+                            f"{datetime.fromtimestamp(max(ts)):%Y-%m-%d %H:%M}）")
+            except Exception:
+                pass
+            print(f"[{datetime.now():%H:%M:%S}] 已从缓存恢复 {len(posts)} 条历史发言{span}。")
+            # 备份里条数明显更多时提示一下，便于发现「悄悄变少」的情况
+            try:
+                bak = f"{POSTS_CACHE_PATH}.bak1"
+                if os.path.exists(bak):
+                    with open(bak, "r", encoding="utf-8") as f:
+                        n = len((json.load(f) or {}).get("posts") or [])
+                    if n > len(posts) * 2 and n > 200:
+                        print(f"[{datetime.now():%H:%M:%S}] [提示] 上一份备份有 {n} 条，"
+                              f"当前存档仅 {len(posts)} 条，若不符预期可手工取用 {bak}")
+            except Exception:
+                pass
         except Exception as e:
             print(f"[缓存] 恢复失败: {e}")
 
-    # ---------- 抓取 ----------
-    def fetch_author_posts(self, tid, authorid):
-        """抓取 (tid, authorid) 的最后一页（即最新发言）。
+    def _load_cache_from_backup(self, silent_if_empty=False):
+        """从 .bak1~.bakN 依次尝试恢复缓存，成功返回条数（0 表示都不可用）。"""
+        for i in range(1, CACHE_BACKUP_KEEP + 1):
+            path = f"{POSTS_CACHE_PATH}.bak{i}"
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    posts = (json.load(f) or {}).get("posts") or []
+                if not posts:
+                    continue
+                with self.lock:
+                    self.posts = posts
+                    self.seen_pids = {str(p.get("pid")) for p in posts if p.get("pid")}
+                    for p in posts:
+                        if "content" in p:
+                            p["content_text"] = clean_text(p.get("content", ""))
+                        p["url"] = normalize_post_url(p.get("url") or "")
+                        tt = p.get("thread_title")
+                        if tt:
+                            self.thread_titles[str(p.get("tid"))] = tt
+                    if self.seen_pids:
+                        self.seeded = True
+                    self._cache_count_cached = len(posts)
+                print(f"[{datetime.now():%H:%M:%S}] 已从备份 {path} 恢复 {len(posts)} 条。")
+                return len(posts)
+            except Exception:
+                continue
+        return 0
 
-        NGA 会把过大的 page 参数夹紧到真实末页，所以直接请求 page=9999
-        即可稳定拿到该作者最新的那一页；末页条数不固定（不一定是整 20 条），
-        全部展示，不再按条数配置截断。
+    # ---------- 抓取 ----------
+    def fetch_author_posts(self, tid, authorid, page=9999):
+        """抓取 (tid, authorid) 某一页发言，返回 (posts, real_page)。
+
+        page 默认 9999：NGA 会把过大的 page 夹紧到真实末页，即拿到该作者最新的
+        那一页；末页条数不固定（不一定是整 20 条），全部返回，不再按条数截断。
+        显式传 page=N 则抓第 N 页（回溯补抓时用）。
+
+        real_page 为 NGA 回报的真实页码，用于生成可精确定位的发言链接。
 
         优先用 lite=js JSON 接口（干净、含作者名）；若该接口对该作者截断/
         报错（某些发言多的作者会触发 NGA 服务端截断），则回退到浏览器同款
         的标准 HTML 页面解析，保证数据不丢。
         """
-        raw = self._nga_get(tid, authorid, 9999, lite=True)
+        raw = self._nga_get(tid, authorid, page, lite=True)
         try:
             title = _extract_thread_title(raw)
             if title:
                 self.thread_titles[str(tid)] = title
             users = _extract_users(raw)
-            return parse_posts(raw, tid, authorid, title, users)
+            # 记下这些发言所在的页码：NGA 已把 page=9999 夹紧到末页，__PAGE 即真实页码
+            real_page = _extract_page_from_lite(raw)
+            return parse_posts(raw, tid, authorid, title, users, page=real_page), real_page
         except NgaError as e:
             msg = str(e)
-            # 登录/鉴权问题在 HTML 页面同样无解，直接向上抛
-            if "403" in msg or "未授权" in msg or "未登录" in msg:
+            # 登录/鉴权问题在 HTML 页面同样无解，直接向上抛；风控 302 同理
+            # （换 HTML 接口也会被挡，回退只会浪费一次请求额度）
+            if "403" in msg or "未授权" in msg or "未登录" in msg or "重定向" in msg:
                 raise
             # 其它（多为 lite 接口被截断/解析失败）→ 回退标准 HTML 页面
-            return self._fetch_author_posts_html(tid, authorid)
+            return self._fetch_author_posts_html(tid, authorid, page)
         except json.JSONDecodeError:
-            return self._fetch_author_posts_html(tid, authorid)
+            return self._fetch_author_posts_html(tid, authorid, page)
 
-    def _fetch_author_posts_html(self, tid, authorid):
-        """兜底：用标准 HTML 页面（即浏览器访问的页面）抓取该作者最新一页。"""
-        html = self._nga_get(tid, authorid, 9999, lite=False)
+    def _fetch_author_posts_html(self, tid, authorid, page=9999):
+        """兜底：用标准 HTML 页面（即浏览器访问的页面）抓取该作者某一页。"""
+        html = self._nga_get(tid, authorid, page, lite=False)
         title = _extract_thread_title_from_html(html) or self.thread_titles.get(str(tid), "")
         if title:
             self.thread_titles[str(tid)] = title
         name = _extract_username_from_html(html, authorid)
-        posts = parse_posts_html(html, tid, authorid, title, None)
+        real_page = _extract_page_from_html(html)
+        posts = parse_posts_html(html, tid, authorid, title, None, page=real_page)
         for p in posts:
             if not p.get("author") and name:
                 p["author"] = name
-        return posts
+        return posts, real_page
 
     def _nga_get(self, tid, authorid, page, lite=True, retries=3):
         """请求 NGA read.php（带登录 Cookie），返回解码后的响应文本。
@@ -587,6 +801,11 @@ class NgaMonitor:
                 body = _decode_resp(e)
                 if e.code == 403:
                     raise NgaError("NGA 返回 403 未授权（多半是未登录，请在配置中填写 NGA 登录 Cookie）")
+                if 300 <= e.code < 400:
+                    # NGA 风控：短时间请求过多时 read.php 会返回 302 并把请求重定向成
+                    # 死循环。此时换 HTML 接口也一样被挡，直接向上抛，让调用方
+                    # （回溯补抓）识趣地停手、把预算留到下一轮。
+                    raise NgaError(f"NGA 返回 {e.code} 重定向循环（触发风控，请求过于频繁）")
                 if body.strip().startswith("{"):
                     try:
                         d = json.loads(body, strict=False).get("data", {})
@@ -631,18 +850,208 @@ class NgaMonitor:
             aids = [aids]
         return [{"tid": t, "authorids": aids} for t in tids]
 
-    def check_once(self, do_push_startup=True):
+    def backfill_missing(self, tid, authorid, last_page, known_pids,
+                         max_pages=BACKFILL_MAX_PAGES,
+                         budget=BACKFILL_MAX_PAGES,
+                         delay=BACKFILL_PAGE_DELAY,
+                         start_page=None, floor_page=0):
+        """回溯补抓：从 start_page（默认 last_page-1）往前翻，直到翻到 floor_page。
+
+        原理：NGA 的 authorid 过滤视图按时间正序分页（每页 20 条），新发言只
+        追加到末页。停机/断档期间某作者若发言超过一页，更早的会被挤出末页，
+        常规轮询永远看不到——这些就是漏抓的。
+
+        判据只认 pid：某条 pid 出现在缓存里才说明真的抓过它，没出现过的就是漏抓的。
+
+        ⚠️ 这里刻意**不做提前停止**，固定往前翻满 max_pages 页（默认 5 页）为止。
+        原因（2026-10-16 实测踩过两次坑）：
+          1. 曾加过「时间不晚于缓存最新一条」判据 → 断档（已有更新的发言、中间
+             整段缺失）会在翻到第一页时就被误判为旧帖立刻停止，一条都补不回；
+          2. 只用「碰到已抓过的 pid 就停」→ 若断档前面隔着一段已知发言（紧邻末页
+             那页恰好全是已知的），同样在第一页就停，够不到更远的断档。
+        断档在分页上的位置不固定，只要它在最近 5 页内，翻满 5 页才能确保覆盖。
+        提前停止省下的几次请求，换来的却是断档永远补不回来，得不偿失。
+
+        不会重复推送：收下的都排除了 known_pids，且上层还会按 pid 再判一次重。
+
+        budget / delay 用于节流（见 BACKFILL_PAGE_DELAY 注释）：翻页前先等 delay
+        秒，且本轮最多只发 budget 次请求；碰到 NGA 风控 302 立刻停手并返回
+        limited=True，让上层把剩余预算留到下一轮，别把自己打到被限流。
+
+        返回 (漏抓的发言列表, 已用请求数, 是否被风控打断, 下一次该从哪页继续)。
+        """
+        if not last_page or last_page <= 1:
+            return [], 0, False, None
+        p = min(start_page or (last_page - 1), last_page - 1)
+        found, used, limited = [], 0, False
+        while p > floor_page and p >= 1 and used < min(budget, max_pages):
+            time.sleep(delay)
+            used += 1
+            try:
+                posts, _ = self.fetch_author_posts(tid, authorid, p)
+            except NgaError as e:
+                if "302" in str(e) or "重定向" in str(e):
+                    limited = True
+                    print(f"[{datetime.now():%H:%M:%S}] 回溯翻页触发 NGA 风控 "
+                          f"tid={tid} uid={authorid} page={p}，本轮停止回溯（剩余下轮再补）")
+                else:
+                    print(f"[{datetime.now():%H:%M:%S}] 回溯翻页失败 tid={tid} "
+                          f"uid={authorid} page={p}: {e}")
+                break
+            except Exception as e:
+                print(f"[{datetime.now():%H:%M:%S}] 回溯翻页失败 tid={tid} uid={authorid} page={p}: {e}")
+                break
+            if not posts:
+                break
+            found.extend(x for x in posts if x["pid"] not in known_pids)
+            p -= 1
+        # 下一次的起点：最后翻过的那页再往前一页；翻到头了返回 None（上层记为已翻完）
+        return found, used, limited, (p if p >= 1 else None)
+
+    def _backfill(self, targets, all_posts, budget=BACKFILL_MAX_REQUESTS):
+        """对有历史记录的监控目标逐一看是否有漏抓，补回的新发言并入本轮结果。
+
+        ⚠️ 节流（2026-10-16）：一轮里只花 budget 次请求，**按组合轮转**翻页——
+        本轮从上次停下的位置继续，翻过几个组合就停，下一轮接着翻。这样每轮
+        只多发几次请求，不会触发 NGA 的 302 风控（一次性翻 70 页必被限流，
+        实测会让本轮回溯和下一轮常规抓取全部失败）。
+
+        返回补回的发言列表（供调用方区分「补回的」与「常规新发言」）。
+        """
+        combos = [(t["tid"], aid) for t in targets for aid in t.get("authorids", [])]
+        if not combos:
+            return []
+        # 轮转游标：上轮翻到哪，这轮就从哪继续，保证所有目标轮流被照顾到
+        start = getattr(self, "_bf_cursor", 0) % len(combos)
+        order = combos[start:] + combos[:start]
+
+        got_all, used_all, done = [], 0, 0
+        for tid, aid in order:
+            if used_all >= budget:
+                break
+            done += 1
+            last_page = self.last_pages.get((str(tid), str(aid)))
+            with self.lock:
+                hist = [p for p in self.posts
+                        if str(p.get("tid")) == str(tid)
+                        and str(p.get("authorid")) == str(aid)]
+            known = {p["pid"] for p in hist}
+            if not last_page or not known:
+                continue  # 本轮抓取失败、或该作者无历史记录（新目标）→ 不回溯
+
+            # 每个组合各自记着「上次往前翻到哪页了」，这轮接着翻，避免每轮都
+            # 重复翻紧邻末页那几页（那几页通常全是已知发言，白花预算）。
+            key = (str(tid), str(aid))
+            nxt = self._bf_next.get(key)
+            floor_page = 0
+            if nxt is None:
+                # 之前已经一路翻到第一页：只有当末页又往后长了（出现没翻过的新页）
+                # 才需要重新翻，且只翻新冒出来的那几页（翻到 _bf_base 为止）
+                base = self._bf_base.get(key, 0)
+                if last_page - 1 <= base:
+                    continue
+                nxt, floor_page = last_page - 1, base
+            try:
+                got, used, limited, nxt2 = self.backfill_missing(
+                    tid, aid, last_page, known, budget=budget - used_all,
+                    start_page=nxt, floor_page=floor_page)
+            except Exception as e:
+                print(f"[{datetime.now():%H:%M:%S}] 回溯补抓异常 tid={tid} uid={aid}: {e}")
+                continue
+            used_all += used
+            # base = 已回溯覆盖到的最大页码：下次末页长出新页时，只需补
+            # (base, 新末页] 这一段，不用把整段历史再翻一遍
+            self._bf_base[key] = max(self._bf_base.get(key, 0), nxt)
+            if nxt2 is None:
+                self._bf_next.pop(key, None)   # 已一路翻到第一页，该组合暂毕
+            else:
+                self._bf_next[key] = nxt2
+            if limited:
+                break     # 触发风控：剩余预算留到下一轮
+            if got:
+                all_posts.extend(got)
+                got_all.extend(got)
+                print(f"[{datetime.now():%H:%M:%S}] 回溯补抓 tid={tid} uid={aid}："
+                      f"补回 {len(got)} 条漏抓的发言。")
+        self._bf_cursor = (start + done) % len(combos)
+        if got_all:
+            tail = ("（本次 --no-backfill-push：只入库不推送）"
+                    if self.no_backfill_push else "，新的才推送、更老的只入库")
+            print(f"[{datetime.now():%H:%M:%S}] 回溯补抓共补回 {len(got_all)} 条{tail}。")
+        return got_all
+
+    def _is_pushable(self, p, hist_latest_ts, hist_combos, abs_floor):
+        """判断一条「缓存里没有的」发言到底该不该推企微。
+
+        缓存里没有 ≠ 是新发言。存档一旦缺失（被清/损坏/换机器），回溯往前翻
+        5 页翻出来的全是几个月前的老帖，pid 同样不在缓存里——2026-10-16 就是
+        这样把 9 月的发言一条条推到企微的。所以推送前必须再用时间判一道：
+
+          1. 该作者在本进程里有历史记录，且这条比他已知最新一条**更新**；
+          2. 新作者/新帖（本轮首次见到）→ 首轮只静默播种 20 条，不推送；
+          3. 时间不早于绝对下限（启动时刻 - PUSH_MAX_AGE_HOURS）。
+
+        停机期间的漏抓 ts 一定晚于停机前最后一条，仍会正常推送；只有真正的
+        陈年旧帖才会被拦下（照样入库，页面可查）。
+        """
+        ts = p.get("ts") or 0
+        key = (str(p.get("tid")), str(p.get("authorid")))
+        if ts <= 0:
+            print(f"[{datetime.now():%H:%M:%S}] 跳过推送 pid={p.get('pid')}："
+                  f"发言时间解析失败，无法判断新旧（已入库）")
+            return False
+        if key not in hist_combos:
+            return False          # 新目标：本轮静默播种，下轮起才推送
+        if ts < abs_floor:
+            return False          # 超出硬下限的老帖
+        return ts > hist_latest_ts.get(key, 0)
+
+    def check_once(self, do_push_startup=True, do_backfill=True):
+        # 推送判新基准：本轮入库之前，先记下每个 (帖子, 作者) 已知的最新发言时间。
+        # 之后凡是「不比它更新」的一律只入库、不推送（详见 PUSH_MAX_AGE_HOURS 注释）。
+        with self.lock:
+            hist_latest_ts = {}
+            for p in self.posts:
+                key = (str(p.get("tid")), str(p.get("authorid")))
+                ts = p.get("ts") or 0
+                if ts > hist_latest_ts.get(key, 0):
+                    hist_latest_ts[key] = ts
+        hist_combos = set(k for k, v in hist_latest_ts.items() if v > 0)
+        abs_floor = time.time() - PUSH_MAX_AGE_HOURS * 3600
+
         targets = self._resolve_ids()
         all_posts, errors = [], []
+        tried = 0
         for t in targets:
             tid = t["tid"]
             for aid in t["authorids"]:
+                tried += 1
+                time.sleep(FETCH_COMBO_DELAY)   # 摊平请求速率，别一口气打过去
                 try:
-                    all_posts.extend(self.fetch_author_posts(tid, aid))
+                    posts, real_page = self.fetch_author_posts(tid, aid)
+                    all_posts.extend(posts)
+                    if real_page:
+                        self.last_pages[(str(tid), str(aid))] = real_page
                 except NgaError as e:
                     errors.append(f"tid={tid},uid={aid}: {e}")
                 except Exception as e:
                     errors.append(f"tid={tid},uid={aid}: 抓取失败 {e}")
+
+        # 回溯补抓：每轮都做，但只花固定预算、按组合轮转（节流，见 _backfill）。
+        # 启动第一轮多给一点预算，先把停机期间的漏抓补回来。
+        # 必须已有历史缓存（seeded）才做——首次运行没有「上次抓到哪」的基准。
+        backfilled_pids = set()
+        if do_backfill:
+            self.rounds += 1
+            first = not self.backfilled
+            due = first or (self.rounds % BACKFILL_EVERY_ROUNDS == 0)
+            if first:
+                self.backfilled = True
+            if due and self.seeded:
+                budget = (BACKFILL_FIRST_ROUND_REQUESTS if first
+                          else BACKFILL_MAX_REQUESTS)
+                for p in self._backfill(targets, all_posts, budget=budget):
+                    backfilled_pids.add(p["pid"])
 
         by_pid = {}
         for p in all_posts:
@@ -666,7 +1075,9 @@ class NgaMonitor:
             self.posts = posts
             self.last_check = time.time()
             self.last_error = "; ".join(errors)
-            if not errors:
+            # 「部分成功」也算成功：个别目标配错（如固定 403 的帖子）不该让状态
+            # 一直显示「从未成功」，那样看不出真正的全局故障
+            if not errors or len(errors) < tried:
                 self.last_success = time.time()
 
             if not self.seeded:
@@ -676,12 +1087,24 @@ class NgaMonitor:
                 print(f"[{datetime.now():%H:%M:%S}] 已播种 {len(posts)} 条历史发言（不推送）。")
             else:
                 if self.config.get("monitor_enabled") and new_posts:
+                    pushed_n = 0
                     for p in sorted(new_posts, key=lambda x: x["ts"]):
+                        # --no-backfill-push：补回的历史断档只入库、不推企微
+                        if self.no_backfill_push and p["pid"] in backfilled_pids:
+                            continue
+                        # 只推「比该作者已知最新一条更新」的发言；回溯/存档缺失翻
+                        # 出来的老帖在这里被拦下，只入库不推送（页面照样能看）
+                        if not self._is_pushable(p, hist_latest_ts,
+                                                 hist_combos, abs_floor):
+                            continue
                         print(f"[{datetime.now():%H:%M:%S}] 新发言 uid={p['authorid']} pid={p['pid']} -> 推送")
                         push_post(p)
+                        pushed_n += 1
                     self.seen_pids.update(p["pid"] for p in new_posts)
                     self.last_push = time.time()
-                    print(f"[{datetime.now():%H:%M:%S}] 本轮新增 {len(new_posts)} 条，已推送。")
+                    silent = len(new_posts) - pushed_n
+                    print(f"[{datetime.now():%H:%M:%S}] 本轮新增 {len(new_posts)} 条，"
+                          f"已推送 {pushed_n} 条" + (f"（{silent} 条补回的静默入库）" if silent else "") + "。")
 
             # 启动推送（开启/恢复通知）只发一次；未配置 webhook 或 --test 调试模式安全跳过
             if do_push_startup and not self.startup_pushed:
@@ -708,12 +1131,52 @@ class NgaMonitor:
         lines.append(f"> 当前已缓存 {len(self.posts)} 条发言，新发言将实时推送。")
         send_wecom_msg("\n".join(lines))
 
+    def _backup_cache(self):
+        """把当前存档复制为轮转备份 .bak1~.bakN（旧的往后挪，超出保留数丢弃）。
+
+        只在距上次备份超过 CACHE_BACKUP_INTERVAL 时执行——每轮都复制一份 386KB
+        文件没必要，半小时一份已足够在「写坏一份」时回滚。
+        """
+        now = time.time()
+        if now - getattr(self, "_last_backup_ts", 0) < CACHE_BACKUP_INTERVAL:
+            return
+        self._last_backup_ts = now
+        try:
+            if not os.path.exists(POSTS_CACHE_PATH):
+                return
+            import shutil
+            # 先依次把老的往后挪：bak2 -> bak3, bak1 -> bak2
+            for i in range(CACHE_BACKUP_KEEP - 1, 0, -1):
+                src = f"{POSTS_CACHE_PATH}.bak{i}"
+                dst = f"{POSTS_CACHE_PATH}.bak{i + 1}"
+                if os.path.exists(src):
+                    shutil.copy2(src, dst)
+            shutil.copy2(POSTS_CACHE_PATH, f"{POSTS_CACHE_PATH}.bak1")
+        except Exception as e:
+            print(f"[{datetime.now():%H:%M:%S}] [缓存] 轮转备份失败（不影响主流程）: {e}")
+
+    def _alert(self, msg):
+        """缓存异常告警：打印醒目提示，并尽量往企微推一条（失败不影响主流程）。"""
+        print("\n" + "=" * 60)
+        print(msg)
+        print("=" * 60 + "\n")
+        try:
+            if WEBHOOK_URL:
+                send_wecom_msg("⚠️ NGA 监控缓存异常\n\n" + msg)
+        except Exception:
+            pass
+
     def save_cache(self):
         """把累积的全部发言原子写入 nga_posts.json（落盘即页面读取的唯一数据源）。
 
         采用「写临时文件 + os.replace 原子替换」：页面每次刷新都直接读这份文件，
         若用普通覆盖写，读取方可能在写入中途拿到半截 JSON 而报错；原子替换
         保证页面任何时候读到的都是完整的一整份文件。
+
+        在此之上还加了三重防丢（详见文件顶部 CACHE_BACKUP_* 注释）：
+          1) 覆盖写之前先做轮转备份
+          2) 内存条数远少于磁盘条数时熔断，宁可不写也不把多的数据覆盖成少的
+          3) 熔断时把内存副本另存为 .suspect-<时间戳>，人工可比对抢救
         """
         try:
             with self.lock:
@@ -727,12 +1190,58 @@ class NgaMonitor:
                     "posts": posts,
                 }
                 text = json.dumps(data, ensure_ascii=False, indent=2)
+                mem_count = len(posts)
+
+            # ---- 熔断：内存数据明显少于磁盘现存数据时，拒绝覆盖 ----
+            disk_count = self._disk_count()
+            if disk_count and disk_count > 100 and mem_count < disk_count * CACHE_GUARD_RATIO:
+                suspect = f"{POSTS_CACHE_PATH}.suspect-{datetime.now():%Y%m%d_%H%M%S}.json"
+                try:
+                    with open(suspect, "w", encoding="utf-8") as f:
+                        f.write(text)
+                except Exception:
+                    pass
+                self._alert(
+                    f"缓存覆盖已阻止：磁盘存档 {disk_count} 条，但内存只有 {mem_count} 条。\n"
+                    f"这种情况通常是启动时缓存读取失败导致从空库开始，若照常覆盖会丢失大量历史。\n"
+                    f"内存副本已另存为：{suspect}\n"
+                    f"原存档未改动。\n"
+                    f"若确认要重置（放弃旧存档重新开始）：停止本进程 -> 删除 "
+                    f"{os.path.basename(POSTS_CACHE_PATH)} -> 重新启动。"
+                )
+                return False
+
+            self._backup_cache()
             tmp = POSTS_CACHE_PATH + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(text)
             os.replace(tmp, POSTS_CACHE_PATH)
+            self._cache_count_cached = mem_count
+            return True
         except Exception:
             pass
+        return False
+
+    def _disk_count(self):
+        """磁盘存档里现有多少条发言。
+
+        结果缓存在 self._cache_count_cached（只在首轮真正读一次文件），
+        避免每轮都解析几百 KB 的 JSON。
+        """
+        cached = getattr(self, "_cache_count_cached", None)
+        if cached is not None:
+            return cached
+        try:
+            if not os.path.exists(POSTS_CACHE_PATH):
+                self._cache_count_cached = 0
+                return 0
+            with open(POSTS_CACHE_PATH, "r", encoding="utf-8") as f:
+                n = len((json.load(f) or {}).get("posts") or [])
+            self._cache_count_cached = n
+            return n
+        except Exception:
+            self._cache_count_cached = 0
+            return 0
 
     def dump_debug(self, raw):
         try:
@@ -955,6 +1464,8 @@ def main():
     parser.add_argument("--target", action="append", default=[],
                         help="监控目标，格式 tid:作者id1,作者id2，可重复指定多个帖子")
     parser.add_argument("--interval", type=int, help="刷新频率(秒)，默认 60")
+    parser.add_argument("--no-backfill-push", action="store_true",
+                        help="回溯补回的历史断档发言只入库、不推企微（避免一次性补回几十条刷屏）")
     parser.add_argument("--test", action="store_true",
                         help="调试模式：抓一次并打印，不启动服务/不推送")
     args = parser.parse_args()
@@ -972,6 +1483,8 @@ def main():
         cfg["authorids"] = [int(x) for x in re.split(r"[,\s]+", args.authorids) if x.strip()]
     if args.interval:
         cfg["refresh_interval"] = max(5, int(args.interval))
+    if args.no_backfill_push:
+        cfg["no_backfill_push"] = True
     # 多帖子多作者：--target tid:aid1,aid2 可重复
     cli_targets = []
     for t in (args.target or []):
@@ -984,9 +1497,9 @@ def main():
         cfg["targets"] = cli_targets
 
     if args.test:
-        # 调试模式：抓一次并打印，不启动服务、不推送
+        # 调试模式：抓一次并打印，不启动服务、不推送、不做回溯补抓
         m = NgaMonitor(cfg)
-        m.check_once(do_push_startup=False)
+        m.check_once(do_push_startup=False, do_backfill=False)
         with m.lock:
             posts = m.posts
             err = m.last_error
