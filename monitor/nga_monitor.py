@@ -572,7 +572,7 @@ def push_post(post):
         if budget > 0:
             cut = text.encode("utf-8")[:budget].decode("utf-8", "ignore")
             content = build("> " + "\n> ".join(cut.split("\n")) + "…")
-    send_wecom_msg(content)
+    return send_wecom_msg(content)
 
 
 
@@ -922,11 +922,17 @@ class NgaMonitor:
         出来的全是几个月前的老帖，pid 同样不在缓存里——2026-10-16 就是这样把
         9 月的发言一条条推到企微的。所以推送前必须再用时间判一道：
 
-          1. 该作者在本进程里有历史记录（新目标首轮只静默播种，不推送）；
-          2. 时间不早于绝对下限（启动时刻 - PUSH_MAX_AGE_HOURS，默认 7 天）。
+          1. 该作者在本进程里有历史记录 → 只推「比他已知最新一条更新」的；
+          2. 新作者/新帖（缓存里没有该组合）→ 用第 3 条的绝对下限判：
+             - 有历史存档（seeded，说明是重启或新加的目标）→ 下限内的照样推，
+               这才是「补回漏抓」的本意（2026-10-16 用户指出：10/13 的帖子
+               没超 7 天却被拦下，就是因为这里曾无条件静默）；
+             - 首次运行（无存档，纯播种）→ 一律静默，否则一上来就把末页
+               几十条历史发言全推一遍；
+          3. 时间不早于绝对下限（启动时刻 - PUSH_MAX_AGE_HOURS，默认 7 天）。
 
-        停机期间漏抓的发言、回溯补回来的断档通常在 7 天内 → 正常按时间正序
-        推送；只有陈年旧帖才会被拦下（照样入库，页面可查）。
+        停机期间的漏抓、回溯补回的断档通常在 7 天内 → 正常按时间正序推送；
+        只有陈年旧帖才会被拦下（照样入库，页面可查）。
         """
         ts = p.get("ts") or 0
         key = (str(p.get("tid")), str(p.get("authorid")))
@@ -934,9 +940,13 @@ class NgaMonitor:
             print(f"[{datetime.now():%H:%M:%S}] 跳过推送 pid={p.get('pid')}："
                   f"发言时间解析失败，无法判断新旧（已入库）")
             return False
+        if ts < abs_floor:
+            return False          # 超出硬下限的老帖（7 天内才算「补回的漏抓」）
         if key not in hist_combos:
-            return False          # 新目标：本轮静默播种，下轮起才推送
-        return ts >= abs_floor    # 超出硬下限（默认 7 天）的老帖只入库不推送
+            # 新组合：无历史存档（首次运行）时是纯播种 → 静默；
+            # 有存档时说明是重启/新加目标，7 天内的漏抓要正常推
+            return bool(self.seeded)
+        return ts > hist_latest_ts.get(key, 0)
 
     def check_once(self, do_push_startup=True, do_backfill=True):
         # 推送判新基准：本轮入库之前，先记下哪些 (帖子, 作者) 组合**已有历史**。
