@@ -84,40 +84,29 @@ CACHE_GUARD_RATIO = 0.5        # 内存条数低于磁盘条数的此比例时�
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
-# 回溯补抓的翻页上限：从末页-1 往前最多翻 5 页（约 100 条发言）。
-# 正常情况会在碰到「已抓过的发言」时提前停止；此上限只在历史记录缺失时兜底。
-BACKFILL_MAX_PAGES = 5
+# ===== 回溯补抓（2026-10-16 用户重新定义的规则，别再自作聪明改复杂）=====
+# 启动监控后做**一次**回溯：从该作者末页的前一页开始往前翻，
+#   1. 累计翻到 BACKFILL_MAX_POSTS 条就停（注意是**条数**不是页数，可配置）；
+#   2. 中途碰到「已经抓过的发言」（pid 在缓存里）也立刻停——说明断档到头了；
+#   3. 补回来的发言按时间正序推送。
+# 不再单独跑回溯服务/线程，也不再定期反复回溯。
+BACKFILL_MAX_POSTS = 50          # 往前最多回溯多少**条**（用户要求可配置）
 
-# ⚠️ 回溯翻页必须节流（2026-10-16 实测）：NGA 对短时间内的请求数有风控，
-# 超过后会对 read.php 返回 302 重定向循环（urllib 跟随即报「infinite loop」）。
-# 实测常规 14 个组合轮询（14 次/分钟）是安全的，但紧接着连翻 70 页会让
-# 后续请求全部 302——即回溯自己把自己打挂，还会连累下一轮常规抓取。
-# 所以：翻页之间强制间隔，且每轮回溯只花固定预算（几页），剩下的下一轮接着翻。
-BACKFILL_PAGE_DELAY = 4.0       # 每次翻页前的等待秒数
-BACKFILL_MAX_REQUESTS = 2       # 每轮回溯最多发几次请求（含常规抓取，总量仍远低于风控线）
+# 翻页之间的间隔：NGA 对请求速率有风控（连发十几次会 302 重定向循环），
+# 留一点间隔更稳。回溯最多也就 3 页（50 条 / 每页 20 条），代价可以忽略。
+BACKFILL_PAGE_DELAY = 2.0
 
 # 常规轮询里每个 (帖子, 作者) 之间的间隔。实测（2026-10-16）：风控看的是**速率**——
 # 一口气 2 次/秒连发十几次必吃 302，摊成 0.5 次/秒则完全没事。因此宁可把一轮的
 # 抓取摊到 ~20 秒发完，也不要挤在几秒内打过去。
 FETCH_COMBO_DELAY = 1.5
 
-# 回溯补抓的执行频率：每 BACKFILL_EVERY_ROUNDS 轮做一次（60 秒间隔 ≈ 每 30 分钟）。
-# 为什么不能每轮都翻：实测「翻旧页」比抓末页更容易触发 NGA 风控 302，每轮都翻会
-# 让回溯请求长期处于被限流状态（补不回东西还浪费额度）。半小时一次、每次只翻
-# 两页，既够慢慢把历史补齐，又不影响实时抓取。
-BACKFILL_EVERY_ROUNDS = 30
-# 启动第一轮多给一点预算，先把停机期间的漏抓补回来
-BACKFILL_FIRST_ROUND_REQUESTS = 4
-
 # 推送的「新旧」判据（2026-10-16 加，血泪教训）：
 # 回溯补抓只看「pid 是否在缓存里」，一旦存档缺失（被清/损坏/换机器），
-# 往前翻 5 页翻出来的全是几个月前的老帖，pid 都不在缓存里 → 被当成新发言
+# 往前翻出来的全是几个月前的老帖，pid 都不在缓存里 → 被当成新发言
 # 全量推送，企微被 9 月的发言刷屏。
-# 因此推送前必须再用时间判一道：只推「比该作者已知最新一条更新」的发言，
-# 更老的只入库、不推送（页面照样能看）。断档补回的停机期发言 ts 一定晚于
-# 停机前最后一条，仍会正常推送。
-# 二级硬下限：ts 早于「启动时刻 - N 小时」的一律不推，防止 ts 基准异常时
-# 又把陈年旧帖放出来。
+# 因此推送前再用时间判一道：只推 PUSH_MAX_AGE_HOURS 以内的发言，更老的
+# 只入库、不推送（页面照样能看）；新目标首轮也只静默播种，不推送。
 PUSH_MAX_AGE_HOURS = 168      # 7 天；超过这个岁数的发言只入库不推送
 
 DEFAULT_CONFIG = {
@@ -606,9 +595,6 @@ class NgaMonitor:
         self.backfilled = False      # 停机回溯补抓只在启动后第一轮做
         self.rounds = 0              # 已执行的轮询轮数（用于定期回溯）
         self.last_pages = {}         # (tid, 作者) -> 该作者末页页码（本轮抓取时更新）
-        self._bf_cursor = 0          # 回溯轮转游标：本轮从哪个目标开始
-        self._bf_next = {}           # (tid, 作者) -> 下次往前翻页的起点页码
-        self._bf_base = {}           # (tid, 作者) -> 已回溯覆盖到的最小页码
         # 回溯补回的发言是否推送企微。仅在「清理历史存量断档」时用
         # --no-backfill-push 关掉，避免一次性补回几十条把企微刷屏；
         # 补回的发言照样入库，页面上照常可见。
@@ -851,132 +837,81 @@ class NgaMonitor:
         return [{"tid": t, "authorids": aids} for t in tids]
 
     def backfill_missing(self, tid, authorid, last_page, known_pids,
-                         max_pages=BACKFILL_MAX_PAGES,
-                         budget=BACKFILL_MAX_PAGES,
-                         delay=BACKFILL_PAGE_DELAY,
-                         start_page=None, floor_page=0):
-        """回溯补抓：从 start_page（默认 last_page-1）往前翻，直到翻到 floor_page。
+                         max_posts=BACKFILL_MAX_POSTS,
+                         delay=BACKFILL_PAGE_DELAY):
+        """回溯补抓：从末页的前一页开始往前翻，补齐停机/断档期间漏抓的发言。
 
-        原理：NGA 的 authorid 过滤视图按时间正序分页（每页 20 条），新发言只
-        追加到末页。停机/断档期间某作者若发言超过一页，更早的会被挤出末页，
-        常规轮询永远看不到——这些就是漏抓的。
+        规则（2026-10-16 用户拍板，别再自作聪明改复杂）：
+          1. 最多往前翻 max_posts **条**（不是页数），翻够就停；
+          2. 中途碰到「已经抓过的发言」（pid 在 known_pids 里）立刻停——
+             说明这一段本来就是连续的、没有断档，再往前翻都是抓过的；
+          3. 每页内部按**从新到旧**遍历（NGA 一页内是时间正序），先补离末页近的。
 
-        判据只认 pid：某条 pid 出现在缓存里才说明真的抓过它，没出现过的就是漏抓的。
-
-        ⚠️ 这里刻意**不做提前停止**，固定往前翻满 max_pages 页（默认 5 页）为止。
-        原因（2026-10-16 实测踩过两次坑）：
-          1. 曾加过「时间不晚于缓存最新一条」判据 → 断档（已有更新的发言、中间
-             整段缺失）会在翻到第一页时就被误判为旧帖立刻停止，一条都补不回；
-          2. 只用「碰到已抓过的 pid 就停」→ 若断档前面隔着一段已知发言（紧邻末页
-             那页恰好全是已知的），同样在第一页就停，够不到更远的断档。
-        断档在分页上的位置不固定，只要它在最近 5 页内，翻满 5 页才能确保覆盖。
-        提前停止省下的几次请求，换来的却是断档永远补不回来，得不偿失。
-
-        不会重复推送：收下的都排除了 known_pids，且上层还会按 pid 再判一次重。
-
-        budget / delay 用于节流（见 BACKFILL_PAGE_DELAY 注释）：翻页前先等 delay
-        秒，且本轮最多只发 budget 次请求；碰到 NGA 风控 302 立刻停手并返回
-        limited=True，让上层把剩余预算留到下一轮，别把自己打到被限流。
-
-        返回 (漏抓的发言列表, 已用请求数, 是否被风控打断, 下一次该从哪页继续)。
+        返回补回的发言列表（时间正序：旧→新，缓存里已有的不会返回）。
         """
         if not last_page or last_page <= 1:
-            return [], 0, False, None
-        p = min(start_page or (last_page - 1), last_page - 1)
-        found, used, limited = [], 0, False
-        while p > floor_page and p >= 1 and used < min(budget, max_pages):
+            return []
+        found, p = [], last_page - 1
+        while p >= 1 and len(found) < max_posts:
             time.sleep(delay)
-            used += 1
             try:
                 posts, _ = self.fetch_author_posts(tid, authorid, p)
-            except NgaError as e:
-                if "302" in str(e) or "重定向" in str(e):
-                    limited = True
-                    print(f"[{datetime.now():%H:%M:%S}] 回溯翻页触发 NGA 风控 "
-                          f"tid={tid} uid={authorid} page={p}，本轮停止回溯（剩余下轮再补）")
-                else:
-                    print(f"[{datetime.now():%H:%M:%S}] 回溯翻页失败 tid={tid} "
-                          f"uid={authorid} page={p}: {e}")
-                break
             except Exception as e:
-                print(f"[{datetime.now():%H:%M:%S}] 回溯翻页失败 tid={tid} uid={authorid} page={p}: {e}")
+                print(f"[{datetime.now():%H:%M:%S}] 回溯翻页失败 tid={tid} "
+                      f"uid={authorid} page={p}: {e}")
                 break
             if not posts:
                 break
-            found.extend(x for x in posts if x["pid"] not in known_pids)
+            stop = False
+            for post in reversed(posts):       # 页内从新到旧
+                if post.get("pid") in known_pids:
+                    stop = True                # 碰到抓过的 → 断档到头，收工
+                    break
+                found.append(post)
+                if len(found) >= max_posts:
+                    stop = True
+                    break
+            if stop:
+                break
             p -= 1
-        # 下一次的起点：最后翻过的那页再往前一页；翻到头了返回 None（上层记为已翻完）
-        return found, used, limited, (p if p >= 1 else None)
+        return list(reversed(found))            # 交回上层时按时间正序（旧→新）
 
-    def _backfill(self, targets, all_posts, budget=BACKFILL_MAX_REQUESTS):
-        """对有历史记录的监控目标逐一看是否有漏抓，补回的新发言并入本轮结果。
+    def _backfill(self, targets, all_posts):
+        """启动时对每个监控目标跑**一次**回溯补抓，把漏抓的发言并入本轮结果。
 
-        ⚠️ 节流（2026-10-16）：一轮里只花 budget 次请求，**按组合轮转**翻页——
-        本轮从上次停下的位置继续，翻过几个组合就停，下一轮接着翻。这样每轮
-        只多发几次请求，不会触发 NGA 的 302 风控（一次性翻 70 页必被限流，
-        实测会让本轮回溯和下一轮常规抓取全部失败）。
+        只在启动后第一轮做（不再定期反复跑，也不单独起回溯服务/线程）。
+        每个目标最多往前翻 BACKFILL_MAX_POSTS 条，碰到已抓过的就停。
 
         返回补回的发言列表（供调用方区分「补回的」与「常规新发言」）。
         """
-        combos = [(t["tid"], aid) for t in targets for aid in t.get("authorids", [])]
-        if not combos:
-            return []
-        # 轮转游标：上轮翻到哪，这轮就从哪继续，保证所有目标轮流被照顾到
-        start = getattr(self, "_bf_cursor", 0) % len(combos)
-        order = combos[start:] + combos[:start]
-
-        got_all, used_all, done = [], 0, 0
-        for tid, aid in order:
-            if used_all >= budget:
-                break
-            done += 1
-            last_page = self.last_pages.get((str(tid), str(aid)))
-            with self.lock:
-                hist = [p for p in self.posts
-                        if str(p.get("tid")) == str(tid)
-                        and str(p.get("authorid")) == str(aid)]
-            known = {p["pid"] for p in hist}
-            if not last_page or not known:
-                continue  # 本轮抓取失败、或该作者无历史记录（新目标）→ 不回溯
-
-            # 每个组合各自记着「上次往前翻到哪页了」，这轮接着翻，避免每轮都
-            # 重复翻紧邻末页那几页（那几页通常全是已知发言，白花预算）。
-            key = (str(tid), str(aid))
-            nxt = self._bf_next.get(key)
-            floor_page = 0
-            if nxt is None:
-                # 之前已经一路翻到第一页：只有当末页又往后长了（出现没翻过的新页）
-                # 才需要重新翻，且只翻新冒出来的那几页（翻到 _bf_base 为止）
-                base = self._bf_base.get(key, 0)
-                if last_page - 1 <= base:
+        max_posts = int((self.config or {}).get("backfill_max_posts")
+                        or BACKFILL_MAX_POSTS)
+        got_all = []
+        for t in targets:
+            tid = t["tid"]
+            for aid in t.get("authorids", []):
+                last_page = self.last_pages.get((str(tid), str(aid)))
+                with self.lock:
+                    hist = [p for p in self.posts
+                            if str(p.get("tid")) == str(tid)
+                            and str(p.get("authorid")) == str(aid)]
+                known = {p["pid"] for p in hist}
+                if not last_page or not known:
+                    continue  # 本轮抓取失败、或该作者无历史记录（新目标）→ 不回溯
+                try:
+                    got = self.backfill_missing(tid, aid, last_page, known,
+                                                max_posts=max_posts)
+                except Exception as e:
+                    print(f"[{datetime.now():%H:%M:%S}] 回溯补抓异常 tid={tid} uid={aid}: {e}")
                     continue
-                nxt, floor_page = last_page - 1, base
-            try:
-                got, used, limited, nxt2 = self.backfill_missing(
-                    tid, aid, last_page, known, budget=budget - used_all,
-                    start_page=nxt, floor_page=floor_page)
-            except Exception as e:
-                print(f"[{datetime.now():%H:%M:%S}] 回溯补抓异常 tid={tid} uid={aid}: {e}")
-                continue
-            used_all += used
-            # base = 已回溯覆盖到的最大页码：下次末页长出新页时，只需补
-            # (base, 新末页] 这一段，不用把整段历史再翻一遍
-            self._bf_base[key] = max(self._bf_base.get(key, 0), nxt)
-            if nxt2 is None:
-                self._bf_next.pop(key, None)   # 已一路翻到第一页，该组合暂毕
-            else:
-                self._bf_next[key] = nxt2
-            if limited:
-                break     # 触发风控：剩余预算留到下一轮
-            if got:
-                all_posts.extend(got)
-                got_all.extend(got)
-                print(f"[{datetime.now():%H:%M:%S}] 回溯补抓 tid={tid} uid={aid}："
-                      f"补回 {len(got)} 条漏抓的发言。")
-        self._bf_cursor = (start + done) % len(combos)
+                if got:
+                    all_posts.extend(got)
+                    got_all.extend(got)
+                    print(f"[{datetime.now():%H:%M:%S}] 回溯补抓 tid={tid} uid={aid}："
+                          f"补回 {len(got)} 条漏抓的发言。")
         if got_all:
             tail = ("（本次 --no-backfill-push：只入库不推送）"
-                    if self.no_backfill_push else "，新的才推送、更老的只入库")
+                    if self.no_backfill_push else "，将按时间正序推送")
             print(f"[{datetime.now():%H:%M:%S}] 回溯补抓共补回 {len(got_all)} 条{tail}。")
         return got_all
 
@@ -984,15 +919,14 @@ class NgaMonitor:
         """判断一条「缓存里没有的」发言到底该不该推企微。
 
         缓存里没有 ≠ 是新发言。存档一旦缺失（被清/损坏/换机器），回溯往前翻
-        5 页翻出来的全是几个月前的老帖，pid 同样不在缓存里——2026-10-16 就是
-        这样把 9 月的发言一条条推到企微的。所以推送前必须再用时间判一道：
+        出来的全是几个月前的老帖，pid 同样不在缓存里——2026-10-16 就是这样把
+        9 月的发言一条条推到企微的。所以推送前必须再用时间判一道：
 
-          1. 该作者在本进程里有历史记录，且这条比他已知最新一条**更新**；
-          2. 新作者/新帖（本轮首次见到）→ 首轮只静默播种 20 条，不推送；
-          3. 时间不早于绝对下限（启动时刻 - PUSH_MAX_AGE_HOURS）。
+          1. 该作者在本进程里有历史记录（新目标首轮只静默播种，不推送）；
+          2. 时间不早于绝对下限（启动时刻 - PUSH_MAX_AGE_HOURS，默认 7 天）。
 
-        停机期间的漏抓 ts 一定晚于停机前最后一条，仍会正常推送；只有真正的
-        陈年旧帖才会被拦下（照样入库，页面可查）。
+        停机期间漏抓的发言、回溯补回来的断档通常在 7 天内 → 正常按时间正序
+        推送；只有陈年旧帖才会被拦下（照样入库，页面可查）。
         """
         ts = p.get("ts") or 0
         key = (str(p.get("tid")), str(p.get("authorid")))
@@ -1002,13 +936,11 @@ class NgaMonitor:
             return False
         if key not in hist_combos:
             return False          # 新目标：本轮静默播种，下轮起才推送
-        if ts < abs_floor:
-            return False          # 超出硬下限的老帖
-        return ts > hist_latest_ts.get(key, 0)
+        return ts >= abs_floor    # 超出硬下限（默认 7 天）的老帖只入库不推送
 
     def check_once(self, do_push_startup=True, do_backfill=True):
-        # 推送判新基准：本轮入库之前，先记下每个 (帖子, 作者) 已知的最新发言时间。
-        # 之后凡是「不比它更新」的一律只入库、不推送（详见 PUSH_MAX_AGE_HOURS 注释）。
+        # 推送判新基准：本轮入库之前，先记下哪些 (帖子, 作者) 组合**已有历史**。
+        # 首次见到的组合本轮只静默播种，避免新加目标就把人家几十条老发言全推一遍。
         with self.lock:
             hist_latest_ts = {}
             for p in self.posts:
@@ -1017,7 +949,9 @@ class NgaMonitor:
                 if ts > hist_latest_ts.get(key, 0):
                     hist_latest_ts[key] = ts
         hist_combos = set(k for k, v in hist_latest_ts.items() if v > 0)
-        abs_floor = time.time() - PUSH_MAX_AGE_HOURS * 3600
+        max_age_h = int((self.config or {}).get("push_max_age_hours")
+                        or PUSH_MAX_AGE_HOURS)
+        abs_floor = (time.time() - max_age_h * 3600) if max_age_h > 0 else 0
 
         targets = self._resolve_ids()
         all_posts, errors = [], []
@@ -1037,20 +971,17 @@ class NgaMonitor:
                 except Exception as e:
                     errors.append(f"tid={tid},uid={aid}: 抓取失败 {e}")
 
-        # 回溯补抓：每轮都做，但只花固定预算、按组合轮转（节流，见 _backfill）。
-        # 启动第一轮多给一点预算，先把停机期间的漏抓补回来。
+        # 回溯补抓：**只在启动后做一次**（用户 2026-10-16 定的规则），
+        # 不再定期反复跑、也不单开服务。放在**第 2 轮**而不是紧跟第 1 轮：
+        # 第 1 轮刚打完 14 个请求，紧接着翻页必吃 NGA 302 风控（实测），
+        # 隔一轮再翻成功率明显更高。
         # 必须已有历史缓存（seeded）才做——首次运行没有「上次抓到哪」的基准。
         backfilled_pids = set()
         if do_backfill:
             self.rounds += 1
-            first = not self.backfilled
-            due = first or (self.rounds % BACKFILL_EVERY_ROUNDS == 0)
-            if first:
+            if not self.backfilled and self.seeded and self.rounds >= 2:
                 self.backfilled = True
-            if due and self.seeded:
-                budget = (BACKFILL_FIRST_ROUND_REQUESTS if first
-                          else BACKFILL_MAX_REQUESTS)
-                for p in self._backfill(targets, all_posts, budget=budget):
+                for p in self._backfill(targets, all_posts):
                     backfilled_pids.add(p["pid"])
 
         by_pid = {}
@@ -1466,6 +1397,11 @@ def main():
     parser.add_argument("--interval", type=int, help="刷新频率(秒)，默认 60")
     parser.add_argument("--no-backfill-push", action="store_true",
                         help="回溯补回的历史断档发言只入库、不推企微（避免一次性补回几十条刷屏）")
+    parser.add_argument("--backfill-posts", type=int, default=BACKFILL_MAX_POSTS,
+                        help=f"启动时每个作者最多往前回溯多少**条**发言（默认 {BACKFILL_MAX_POSTS}）")
+    parser.add_argument("--push-max-age-hours", type=int, default=PUSH_MAX_AGE_HOURS,
+                        help=f"超过这个小时数的发言只入库不推送（默认 {PUSH_MAX_AGE_HOURS}，"
+                             f"即 7 天；设 0 表示不限制）")
     parser.add_argument("--test", action="store_true",
                         help="调试模式：抓一次并打印，不启动服务/不推送")
     args = parser.parse_args()
@@ -1485,6 +1421,10 @@ def main():
         cfg["refresh_interval"] = max(5, int(args.interval))
     if args.no_backfill_push:
         cfg["no_backfill_push"] = True
+    # 回溯条数上限（条，不是页）；页面/命令行都能改，默认 BACKFILL_MAX_POSTS
+    cfg["backfill_max_posts"] = max(0, int(args.backfill_posts or 0)) or BACKFILL_MAX_POSTS
+    # 推送时间门槛（小时）：设 0 = 不限，抓到没见过的就推
+    cfg["push_max_age_hours"] = max(0, int(args.push_max_age_hours or 0))
     # 多帖子多作者：--target tid:aid1,aid2 可重复
     cli_targets = []
     for t in (args.target or []):
