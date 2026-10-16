@@ -2015,31 +2015,185 @@
                 lastRefreshTime.value = `${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
             };
 
-            // qt.gtimg.cn 返回 GBK 编码，UTF-8 页面必须显式 charset=gbk 才能正确解码。
-            // 外部浏览器（file://）直连即可，无需起本地服务。
+            // 行情源（file:// 直开，无需起本地服务）：
+            // 主源：东方财富 push2delay.eastmoney.com JSONP（<script>+cb 回调，无 CORS/Origin 限制，
+            //   同项目 sector_flow_dashboard.html 已验证在你浏览器能取数，使用该域名与超时 20s）。
+            // 备用：东方财富 push2.eastmoney.com（更实时）。
+            // 兜底（静默）：腾讯 qt.gtimg.cn / 新浪 hq.sinajs.cn，仅在你对域名放行时自动生效。
+            const EM_UT = 'fa5fd1943c7b386f172d6893dbfba10b';
+            const SINA_BASE = 'https://hq.sinajs.cn/list=';
+            const TX_BASE = 'https://qt.gtimg.cn/q=';
+            const numOr = (x, def) => {
+                if (x === undefined || x === null || x === '') return (def === undefined ? NaN : def);
+                const n = parseFloat(String(x).trim());
+                return Number.isFinite(n) ? n : (def === undefined ? NaN : def);
+            };
+            const emSecid = (code) => {
+                const m = /^([a-z]+)(\d+)$/.exec(code || '');
+                if (!m) return null;
+                const market = m[1], num = m[2];
+                if (market === 'sz') return '0.' + num;
+                if (market === 'sh') return '1.' + num;
+                if (market === 'hk') return '116.' + num;
+                if (market === 'bj') return '0.' + num;
+                return null;
+            };
+
+            // 东方财富 JSONP（带 cb 回调，<script> 注入，无 CORS/Origin 限制）-> 标准化对象存 window['q_'+code]
+            let _emji = 0;
+            const fetchQuoteEM = (codes, host) => new Promise((resolve) => {
+                let pending = codes.length;
+                if (pending === 0) { resolve(); return; }
+                const finishOne = () => { if (--pending === 0) resolve(); };
+                codes.forEach(code => {
+                    const secid = emSecid(code);
+                    if (!secid) { finishOne(); return; }
+                    const cb = '__emcb' + (++_emji) + '_' + Date.now();
+                    const url = `${host}/api/qt/stock/get?secid=${secid}&fields=f43,f44,f45,f46,f47,f48,f51,f52,f57,f58,f60,f167,f169,f170,f171&invt=2&fltt=2&ut=${EM_UT}&cb=${cb}`;
+                    const s = document.createElement('script');
+                    const clean = () => { try { delete window[cb]; } catch (e) { window[cb] = undefined; } s.remove(); };
+                    let done = false;
+                    window[cb] = (j) => {
+                        if (done) return; done = true; clean();
+                        const d = j && j.data;
+                        if (d) {
+                            const now = numOr(d.f43, NaN);
+                            const prevClose = numOr(d.f60, NaN);
+                            const high = numOr(d.f44, NaN);
+                            const low = numOr(d.f45, NaN);
+                            const vol = numOr(d.f47, NaN);
+                            const amount = numOr(d.f48, NaN);
+                            let avg = NaN;
+                            if (Number.isFinite(amount) && Number.isFinite(vol) && vol > 0) avg = amount / (vol * 100);
+                            const amplitude = numOr(d.f171, NaN);
+                            window['q_' + code] = {
+                                name: d.f58 || '', now, prevClose, open: numOr(d.f46, NaN),
+                    change: numOr(d.f169, NaN), changePct: numOr(d.f170, NaN),
+                    high, low, amplitude, volumeRatio: numOr(d.f167, NaN), amount, totalHands: vol,
+                                avg: Number.isFinite(avg) ? parseFloat(avg.toFixed(3)) : NaN,
+                                limitUp: numOr(d.f51, NaN), limitDown: numOr(d.f52, NaN)
+                            };
+                        }
+                        finishOne();
+                    };
+                    s.onerror = () => { if (done) return; done = true; clean(); finishOne(); };
+                    setTimeout(() => { if (done) return; done = true; clean(); finishOne(); }, 20000);
+                    s.src = url;
+                    document.body.appendChild(s);
+                });
+            });
+
+            // 新浪返回值（GBK）-> 标准化对象
+            const parseSina = (code, str) => {
+                if (!str || typeof str !== 'string') return null;
+                const p = str.split(',');
+                if (p.length < 10) return null;
+                const open = numOr(p[1], NaN);
+                const prevClose = numOr(p[2], NaN);
+                const now = numOr(p[3], NaN);
+                const high = numOr(p[4], NaN);
+                const low = numOr(p[5], NaN);
+                const volShares = numOr(p[8], NaN);
+                const amount = numOr(p[9], NaN);
+                const totalHands = Number.isFinite(volShares) && volShares > 0 ? volShares / 100 : NaN;
+                let avg = NaN;
+                if (Number.isFinite(amount) && Number.isFinite(totalHands) && totalHands > 0) avg = amount / (totalHands * 100);
+                let amplitude = NaN;
+                if (Number.isFinite(high) && Number.isFinite(low) && Number.isFinite(prevClose) && prevClose > 0) amplitude = (high - low) / prevClose * 100;
+                const change = Number.isFinite(now) && Number.isFinite(prevClose) ? now - prevClose : NaN;
+                const changePct = Number.isFinite(change) && Number.isFinite(prevClose) && prevClose > 0 ? change / prevClose * 100 : NaN;
+                const obj = {
+                    name: (p[0] || '').trim(),
+                    now, prevClose, open, change, changePct,
+                    high, low, amplitude,
+                    volumeRatio: NaN, amount, totalHands,
+                    avg: Number.isFinite(avg) ? parseFloat(avg.toFixed(3)) : NaN,
+                    limitUp: NaN, limitDown: NaN
+                };
+                window['q_' + code] = obj;
+                return obj;
+            };
+
+            // 腾讯返回值（GBK，~ 分隔）-> 标准化对象
+            const parseTencent = (code, str) => {
+                if (!str || typeof str !== 'string') return null;
+                const d = str.split('~');
+                if (d.length < 50) return null;
+                const now = numOr(d[3], NaN);
+                const prevClose = numOr(d[4], NaN);
+                const open = numOr(d[5], NaN);
+                const change = numOr(d[31], NaN);
+                const changePct = numOr(d[32], NaN);
+                const high = numOr(d[33], NaN);
+                const low = numOr(d[34], NaN);
+                const tradeSummary = (d[35] || '').split('/');
+                const totalHands = numOr(d[36], NaN);
+                let amount = numOr(tradeSummary[2], NaN);
+                const amplitude = numOr(d[43], NaN);
+                const volumeRatio = numOr(d[49], NaN);
+                const limitUp = numOr(d[47], NaN);
+                const limitDown = numOr(d[48], NaN);
+                const quoteAvg = numOr(d[51], NaN);
+                const quoteAmountWan = numOr(d[57], NaN);
+                let avg = quoteAvg;
+                if (!Number.isFinite(avg) && Number.isFinite(quoteAmountWan)) amount = quoteAmountWan * 10000;
+                if (!Number.isFinite(avg) && Number.isFinite(amount) && Number.isFinite(totalHands) && totalHands > 0) avg = amount / (totalHands * 100);
+                const obj = {
+                    name: (d[1] || '').trim(),
+                    now, prevClose, open, change, changePct,
+                    high, low, amplitude, volumeRatio, amount, totalHands,
+                    avg: Number.isFinite(avg) ? parseFloat(avg.toFixed(3)) : NaN,
+                    limitUp, limitDown
+                };
+                window['q_' + code] = obj;
+                return obj;
+            };
+
+            // JSONP 加载单段脚本（带 charset 正确解码 GBK），返回是否加载成功
+            const jsonpLoad = (url, charset, timeoutMs) => new Promise((resolve) => {
+                const script = document.createElement('script');
+                script.charset = charset || 'gbk';
+                let done = false;
+                const timer = setTimeout(() => {
+                    if (done) return; done = true; script.remove(); resolve(false);
+                }, timeoutMs || 8000);
+                script.onerror = () => {
+                    if (done) return; done = true; clearTimeout(timer); script.remove(); resolve(false);
+                };
+                script.onload = () => {
+                    if (done) return; done = true; clearTimeout(timer); script.remove(); resolve(true);
+                };
+                script.src = url;
+                document.body.appendChild(script);
+            });
+
+            // 主：东方财富 JSONP（push2delay 已验证可用 -> push2 更实时）-> 腾讯 JSONP -> 新浪 JSONP 兜底
             const requestQuoteData = (codes, scriptId, onLoaded, onError) => {
                 if (!codes || codes.length === 0) {
                     if (onLoaded) onLoaded();
                     return;
                 }
-                const oldScript = document.getElementById(scriptId);
-                if (oldScript) oldScript.remove();
-                const script = document.createElement('script');
-                script.id = scriptId;
-                script.charset = 'gbk';
-                script.src = `https://qt.gtimg.cn/q=${codes.join(',')}`;
-                script.onerror = () => {
-                    script.remove();
-                    if (typeof ElMessage !== 'undefined') {
-                        ElMessage.warning('行情获取失败：请检查网络后刷新（行情接口 qt.gtimg.cn）');
-                    }
-                    if (onError) onError();
+                const tryNext = () => {
+                    jsonpLoad(TX_BASE + codes.join(','), 'gbk').then(() => {
+                        codes.forEach(c => parseTencent(c, window['v_' + c]));
+                        if (codes.some(c => window['q_' + c])) { if (onLoaded) onLoaded(); return; }
+                        jsonpLoad(SINA_BASE + codes.join(',')).then(() => {
+                            codes.forEach(c => parseSina(c, window['hq_str_' + c]));
+                            if (codes.some(c => window['q_' + c])) { if (onLoaded) onLoaded(); }
+                            else {
+                                if (typeof ElMessage !== 'undefined') ElMessage.warning('行情获取失败：东方财富/腾讯/新浪均不可用，请检查网络后刷新');
+                                if (onError) onError();
+                            }
+                        });
+                    });
                 };
-                script.onload = () => {
-                    if (onLoaded) onLoaded();
-                    script.remove();
-                };
-                document.body.appendChild(script);
+                fetchQuoteEM(codes, 'https://push2delay.eastmoney.com').then(() => {
+                    if (codes.some(c => window['q_' + c])) { if (onLoaded) onLoaded(); return; }
+                    fetchQuoteEM(codes, 'https://push2.eastmoney.com').then(() => {
+                        if (codes.some(c => window['q_' + c])) { if (onLoaded) onLoaded(); return; }
+                        tryNext();
+                    });
+                });
             };
 
             const fetchMarketIndexes = () => {
@@ -2050,27 +2204,21 @@
                 requestQuoteData(codes, 'jsonp-index-overview', () => {
                     const cacheKey = Date.now();
                     marketIndexData.value.forEach(item => {
-                        const dataStr = window[`v_${item.fullCode}`];
-                        if (!dataStr) return;
-                        const d = dataStr.split('~');
-                        const nowPrice = parseFloat(d[3]);
-                        const prevClose = parseFloat(d[4]);
-                        const openPrice = parseFloat(d[5]);
-                        const changeValue = parseFloat(d[31]);
-                        const changePct = parseFloat(d[32]);
-                        const dayHigh = parseFloat(d[33]);
-                        const dayLow = parseFloat(d[34]);
-                        const tradeSummary = (d[35] || '').split('/');
-                        const totalHands = parseFloat(d[36]);
-                        let amount = parseFloat(tradeSummary[2]);
-                        const amplitude = parseFloat(d[43]);
-                        const volumeRatio = parseFloat(d[49]);
-                        const avgPrice = parseFloat(d[51]);
-                        const quoteAmountWan = parseFloat(d[57]);
-                        if (!Number.isFinite(amount) && Number.isFinite(quoteAmountWan)) {
-                            amount = quoteAmountWan * 10000;
-                        }
-                        item.name = d[1] || item.name;
+                        const q = window[`q_${item.fullCode}`];
+                        if (!q) return;
+                        const nowPrice = q.now;
+                        const prevClose = q.prevClose;
+                        const openPrice = q.open;
+                        const changeValue = q.change;
+                        const changePct = q.changePct;
+                        const dayHigh = q.high;
+                        const dayLow = q.low;
+                        const totalHands = q.totalHands;
+                        const amount = q.amount;
+                        const amplitude = q.amplitude;
+                        const volumeRatio = q.volumeRatio;
+                        const avgPrice = q.avg;
+                        item.name = q.name || item.name;
                         item.now = Number.isFinite(nowPrice) ? nowPrice : item.now;
                         item.prevClose = Number.isFinite(prevClose) ? prevClose : item.prevClose;
                         item.change = Number.isFinite(changeValue) ? changeValue : (Number.isFinite(nowPrice) && Number.isFinite(prevClose) ? nowPrice - prevClose : item.change);
@@ -2100,42 +2248,22 @@
                 if (!isAuto) loading.value = true;
                 requestQuoteData(codes, 'jsonp-stock', () => {
                     codes.forEach(code => {
-                        const dataStr = window[`v_${code}`];
-                        if (dataStr) {
-                            const d = dataStr.split('~');
-                            const nowPrice = parseFloat(d[3]);
-                            const prevClose = parseFloat(d[4]);
-                            const openPrice = parseFloat(d[5]);
-                            const changeValue = parseFloat(d[31]);
-                            const changePct = parseFloat(d[32]) || 0;
-                            const dayHigh = parseFloat(d[33]);
-                            const dayLow = parseFloat(d[34]);
-                            const tradeSummary = (d[35] || '').split('/');
-                            const totalHands = parseFloat(d[36]);
-                            let turnover = parseFloat(d[37]);
-                            let volume = totalHands;
-                            let amount = parseFloat(tradeSummary[2]);
-                            const amplitude = parseFloat(d[43]);
-                            const limitUp = parseFloat(d[47]);
-                            const limitDown = parseFloat(d[48]);
-                            const volumeRatio = parseFloat(d[49]);
-                            const quoteAvg = parseFloat(d[51]);
-                            const quoteAmountWan = parseFloat(d[57]);
-                            let newAvg = 0;
-                            if (!Number.isFinite(amount) && Number.isFinite(quoteAmountWan)) {
-                                amount = quoteAmountWan * 10000;
-                            }
-                            if (code.startsWith('hk')) {
-                                newAvg = volume > 0 ? turnover / volume : parseFloat(d[4]);
-                            } else if (code.startsWith('sh68') || code.startsWith('bj')) {
-                                newAvg = volume > 0 ? (turnover * 10000) / volume : parseFloat(d[4]);
-                            } else {
-                                newAvg = volume > 0 ? (turnover * 10000) / (volume * 100) : parseFloat(d[4]);
-                            }
-                            if (Number.isFinite(quoteAvg)) {
-                                newAvg = quoteAvg;
-                            }
-                            const avgPrice = Number.isFinite(newAvg) ? parseFloat(newAvg.toFixed(3)) : 0;
+                        const q = window[`q_${code}`];
+                        if (q) {
+                            const nowPrice = q.now;
+                            const prevClose = q.prevClose;
+                            const openPrice = q.open;
+                            const changeValue = q.change;
+                            const changePct = q.changePct || 0;
+                            const dayHigh = q.high;
+                            const dayLow = q.low;
+                            const totalHands = q.totalHands;
+                            const amount = q.amount;
+                            const amplitude = q.amplitude;
+                            const limitUp = q.limitUp;
+                            const limitDown = q.limitDown;
+                            const volumeRatio = q.volumeRatio;
+                            const avgPrice = q.avg;
                             const resolvedChange = Number.isFinite(changeValue)
                                 ? changeValue
                                 : (Number.isFinite(nowPrice) && Number.isFinite(prevClose) ? nowPrice - prevClose : 0);
@@ -2143,7 +2271,7 @@
                             const idx = tableData.value.findIndex(item => item.fullCode === code);
                             if (idx > -1) {
                                 const item = tableData.value[idx];
-                                item.name = d[1] || item.name;
+                                item.name = q.name || item.name;
                                 item.now = nowPrice;
                                 item.prevClose = Number.isFinite(prevClose) ? prevClose : item.prevClose;
                                 item.open = Number.isFinite(openPrice) ? openPrice : item.open;
@@ -2163,7 +2291,7 @@
                                 calculateRow(item);
                             } else if (isAddition) {
                                 const newItem = reactive({
-                                    name: d[1], fullCode: code, now: nowPrice,
+                                    name: q.name, fullCode: code, now: nowPrice,
                                     prevClose: Number.isFinite(prevClose) ? prevClose : '',
                                     open: Number.isFinite(openPrice) ? openPrice : '',
                                     change: Number.isFinite(resolvedChange) ? resolvedChange : 0,
@@ -2342,7 +2470,7 @@
                 handleChartPopoverEnter, handleChartPopoverLeave,
                 chartDialog, getDialogChartUrl, openChartDialog, closeChartDialog, switchDialogChart,
                 launchMonitor, getPositionPct, formatPositionPct, getProfitInfo, getDailyProfit,
-                monitorAll, toggleMonitorAll
+                saveToLocal, monitorAll, toggleMonitorAll
             };
         }
     };
