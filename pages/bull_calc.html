@@ -1161,7 +1161,7 @@
     </el-config-provider>
 </div>
 <script>
-    const { createApp, ref, onMounted, reactive, nextTick, onUnmounted } = Vue;
+    const { createApp, ref, computed, onMounted, reactive, nextTick, onUnmounted } = Vue;
     const { ElMessage, ElMessageBox } = ElementPlus;
     const App = {
         setup() {
@@ -1185,7 +1185,11 @@
             };
             const inputCodes = ref("");
             const tableData = ref([]);
-            const monitorAll = ref(true);
+            // 表头「推送」复选框：反映当前所有行的真实勾选状态（不再每次加载都硬编码为 true），点击则统一设置
+            const monitorAll = computed({
+                get: () => tableData.value.length > 0 && tableData.value.every(r => r.monitor !== false),
+                set: (val) => toggleMonitorAll(val)
+            });
             const toggleMonitorAll = (val) => {
                 tableData.value.forEach(row => { row.monitor = val; });
                 saveToLocal();
