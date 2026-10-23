@@ -963,19 +963,21 @@ class NgaMonitor:
             print(f"[{datetime.now():%H:%M:%S}] 回溯补抓共补回 {len(got_all)} 条{tail}。")
         return got_all
 
-    def _is_pushable(self, p, hist_latest_ts, hist_combos, abs_floor):
+    def _is_pushable(self, p, abs_floor):
         """判断一条「缓存里没有的」发言到底该不该推企微。
 
         缓存里没有 ≠ 是新发言。存档一旦缺失（被清/损坏/换机器），回溯往前翻
         出来的全是几个月前的老帖，pid 同样不在缓存里——2026-10-16 就是这样把
-        9 月的发言一条条推到企微的。所以推送前必须再用时间判一道：
+        9 月的发言一条条推到企微的。所以推送前必须用时间判一道：
 
-          1. **新作者/新帖（缓存里没有该组合）→ 首轮一律静默播种**。这是用户
-             2026-10-17 拍板确认保留的规则：新加的目标先把历史存下来，不拿
-             几十条旧发言刷企微，从下一轮起的新发言才推。
-             （期间我曾改成「有存档就推」，用户不接受，已改回静默。）
-          2. 有历史记录的组合 → 时间不早于绝对下限（启动时刻 -
-             PUSH_MAX_AGE_HOURS，默认 7 天）即可推。
+            **唯一判据 = 时间不早于绝对下限（启动时刻 - PUSH_MAX_AGE_HOURS，
+            默认 7 天，页面「推送时间门槛」可配，0 = 不限）。**
+
+        ⚠️ 2026-10-24 用户拍板：**不再区分新/老组合**。此前「新加的作者/帖子
+        首轮一律静默」的规则已删除——新加目标（如 zippo579）当轮就该推，
+        否则用户加了半天收不到消息。限制只保留两个，且都在页面可配：
+          1. 回溯最多往前翻 50 条（--backfill-posts / 页面「启动时回溯条数」）；
+          2. 推送时间门槛 7 天（--push-max-age-hours / 页面「推送时间门槛」）。
 
         ⚠️ 刻意**不**用「必须比该作者已知最新一条更新」做判据：停机断档补回的
         发言恰恰早于已知最新一条（中间缺一段、更新的已经在库），那样会把真正
@@ -983,26 +985,15 @@ class NgaMonitor:
         被拦下的发言照样入库，页面可查。
         """
         ts = p.get("ts") or 0
-        key = (str(p.get("tid")), str(p.get("authorid")))
         if ts <= 0:
             print(f"[{datetime.now():%H:%M:%S}] 跳过推送 pid={p.get('pid')}："
                   f"发言时间解析失败，无法判断新旧（已入库）")
             return False
-        if key not in hist_combos:
-            return False          # 新目标：首轮静默播种，下轮起才推送
         return ts >= abs_floor    # 超出硬下限（默认 7 天）的老帖只入库不推送
 
     def check_once(self, do_push_startup=True, do_backfill=True):
-        # 推送判新基准：本轮入库之前，先记下哪些 (帖子, 作者) 组合**已有历史**。
-        # 首次见到的组合本轮只静默播种，避免新加目标就把人家几十条老发言全推一遍。
-        with self.lock:
-            hist_latest_ts = {}
-            for p in self.posts:
-                key = (str(p.get("tid")), str(p.get("authorid")))
-                ts = p.get("ts") or 0
-                if ts > hist_latest_ts.get(key, 0):
-                    hist_latest_ts[key] = ts
-        hist_combos = set(k for k, v in hist_latest_ts.items() if v > 0)
+        # 推送判新基准：2026-10-24 起**只看时间下限**，不再区分新/老组合
+        # （此前「新组合首轮静默」已按用户要求删除）。ts 解析不出的一律不推。
         max_age_h = int((self.config or {}).get("push_max_age_hours")
                         or PUSH_MAX_AGE_HOURS)
         abs_floor = (time.time() - max_age_h * 3600) if max_age_h > 0 else 0
@@ -1079,8 +1070,7 @@ class NgaMonitor:
                             continue
                         # 只推「比该作者已知最新一条更新」的发言；回溯/存档缺失翻
                         # 出来的老帖在这里被拦下，只入库不推送（页面照样能看）
-                        if not self._is_pushable(p, hist_latest_ts,
-                                                 hist_combos, abs_floor):
+                        if not self._is_pushable(p, abs_floor):
                             continue
                         print(f"[{datetime.now():%H:%M:%S}] 新发言 uid={p['authorid']} pid={p['pid']} -> 推送")
                         push_post(p)
