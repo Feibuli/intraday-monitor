@@ -92,9 +92,13 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 # 不再单独跑回溯服务/线程，也不再定期反复回溯。
 BACKFILL_MAX_POSTS = 50          # 往前最多回溯多少**条**（用户要求可配置）
 
-# 翻页之间的间隔：NGA 对请求速率有风控（连发十几次会 302 重定向循环），
-# 留一点间隔更稳。回溯最多也就 3 页（50 条 / 每页 20 条），代价可以忽略。
+# 翻页之间的间隔（2026-10-24 起每轮只翻 1 页，间隔主要由轮询周期决定，
+# 这里只是让它别和本轮那十几个常规请求挤在一起）。
 BACKFILL_PAGE_DELAY = 2.0
+# 同一个组合连续翻页失败多少次才放弃（2026-10-24 加）。用户要求「回溯对耗时
+# 不敏感，但不能少」——所以失败**不减少深度**，页码原样保留、下一轮重试；
+# 只有连续失败到这个次数（说明该页确实取不到，多半是帖子权限问题）才跳过。
+BACKFILL_MAX_FAILS = 10
 
 # 常规轮询里每个 (帖子, 作者) 之间的间隔。实测（2026-10-16）：风控看的是**速率**——
 # 一口气 2 次/秒连发十几次必吃 302，摊成 0.5 次/秒则完全没事。因此宁可把一轮的
@@ -593,7 +597,11 @@ class NgaMonitor:
         self._name_cache = {}     # (tid, uids元组) -> 解析结果，供 /api/resolve 复用
         self.running = True
         self.startup_pushed = False  # 启动推送（开启/恢复通知）只发一次
-        self.backfilled = False      # 停机回溯补抓只在启动后第一轮做
+        # 回溯补抓的分片状态（2026-10-24：每轮只翻 1 页，慢慢补完，不减深度）
+        self._bf_queue = None        # None=未初始化；[] 或 None 之外=待回溯的 (tid,aid) 队列
+        self._bf_page = {}           # (tid, aid) -> 下一页要翻的页码
+        self._bf_got = {}            # (tid, aid) -> 已补回条数
+        self._bf_fail = {}           # (tid, aid) -> 连续失败次数
         self.rounds = 0              # 已执行的轮询轮数（用于定期回溯）
         self.last_pages = {}         # (tid, 作者) -> 该作者末页页码（本轮抓取时更新）
         # 回溯补回的发言是否推送企微。仅在「清理历史存量断档」时用
@@ -884,84 +892,121 @@ class NgaMonitor:
             aids = [aids]
         return [{"tid": t, "authorids": aids} for t in tids]
 
-    def backfill_missing(self, tid, authorid, last_page, known_pids,
-                         max_posts=BACKFILL_MAX_POSTS,
-                         delay=BACKFILL_PAGE_DELAY):
-        """回溯补抓：从末页的前一页开始往前翻，补齐停机/断档期间漏抓的发言。
+    def backfill_one_page(self, tid, authorid, page, known_pids,
+                          max_posts=BACKFILL_MAX_POSTS, already=0):
+        """回溯补抓的**单页**步骤：翻一页，返回这一页里漏抓的发言。
 
         规则（2026-10-16 用户拍板，别再自作聪明改复杂）：
-          1. 最多往前翻 max_posts **条**（不是页数），翻够就停；
+          1. 累计翻到 max_posts **条**（不是页数）就停；
           2. 中途碰到「已经抓过的发言」（pid 在 known_pids 里）立刻停——
              说明这一段本来就是连续的、没有断档，再往前翻都是抓过的；
           3. 每页内部按**从新到旧**遍历（NGA 一页内是时间正序），先补离末页近的。
 
-        返回补回的发言列表（时间正序：旧→新，缓存里已有的不会返回）。
+        返回 (这一页补回的发言列表(时间正序), 是否到此为止, 下一页页码)。
         """
-        if not last_page or last_page <= 1:
-            return []
-        found, p = [], last_page - 1
-        while p >= 1 and len(found) < max_posts:
-            time.sleep(delay)
-            try:
-                posts, _ = self.fetch_author_posts(tid, authorid, p)
-            except Exception as e:
-                print(f"[{datetime.now():%H:%M:%S}] 回溯翻页失败 tid={tid} "
-                      f"uid={authorid} page={p}: {e}")
+        try:
+            posts, _ = self.fetch_author_posts(tid, authorid, page)
+        except Exception as e:
+            print(f"[{datetime.now():%H:%M:%S}] 回溯翻页失败 tid={tid} "
+                  f"uid={authorid} page={page}: {e}")
+            return [], False, page      # 页码原样返回 → 上层下轮重试，不减少深度
+        if not posts:
+            return [], True, page - 1   # 空页 = 到头
+        found, stop = [], False
+        for post in reversed(posts):    # 页内从新到旧
+            if post.get("pid") in known_pids:
+                stop = True             # 碰到抓过的 → 断档到头，收工
                 break
-            if not posts:
+            found.append(post)
+            if already + len(found) >= max_posts:
+                stop = True
                 break
-            stop = False
-            for post in reversed(posts):       # 页内从新到旧
-                if post.get("pid") in known_pids:
-                    stop = True                # 碰到抓过的 → 断档到头，收工
-                    break
-                found.append(post)
-                if len(found) >= max_posts:
-                    stop = True
-                    break
-            if stop:
-                break
-            p -= 1
-        return list(reversed(found))            # 交回上层时按时间正序（旧→新）
+        return list(reversed(found)), stop, page - 1
 
-    def _backfill(self, targets, all_posts):
-        """启动时对每个监控目标跑**一次**回溯补抓，把漏抓的发言并入本轮结果。
+    def _bf_init(self, targets):
+        """初始化回溯队列：把「有历史记录且拿到了末页」的组合排队。
 
-        只在启动后第一轮做（不再定期反复跑，也不单独起回溯服务/线程）。
-        每个目标最多往前翻 BACKFILL_MAX_POSTS 条，碰到已抓过的就停。
-
-        返回补回的发言列表（供调用方区分「补回的」与「常规新发言」）。
+        只做一次。没有历史（新目标）或本轮没抓到末页的组合直接跳过——
+        没有「上次抓到哪」的基准，回溯没有意义。
         """
-        max_posts = int((self.config or {}).get("backfill_max_posts")
-                        or BACKFILL_MAX_POSTS)
-        got_all = []
+        q = []
         for t in targets:
             tid = t["tid"]
             for aid in t.get("authorids", []):
-                last_page = self.last_pages.get((str(tid), str(aid)))
+                key = (str(tid), str(aid))
+                last_page = self.last_pages.get(key)
                 with self.lock:
-                    hist = [p for p in self.posts
-                            if str(p.get("tid")) == str(tid)
-                            and str(p.get("authorid")) == str(aid)]
-                known = {p["pid"] for p in hist}
-                if not last_page or not known:
-                    continue  # 本轮抓取失败、或该作者无历史记录（新目标）→ 不回溯
-                try:
-                    got = self.backfill_missing(tid, aid, last_page, known,
-                                                max_posts=max_posts)
-                except Exception as e:
-                    print(f"[{datetime.now():%H:%M:%S}] 回溯补抓异常 tid={tid} uid={aid}: {e}")
+                    known = {p["pid"] for p in self.posts
+                             if str(p.get("tid")) == str(tid)
+                             and str(p.get("authorid")) == str(aid)}
+                if not last_page or last_page <= 1 or not known:
                     continue
-                if got:
-                    all_posts.extend(got)
-                    got_all.extend(got)
-                    print(f"[{datetime.now():%H:%M:%S}] 回溯补抓 tid={tid} uid={aid}："
-                          f"补回 {len(got)} 条漏抓的发言。")
-        if got_all:
-            tail = ("（本次 --no-backfill-push：只入库不推送）"
-                    if self.no_backfill_push else "，将按时间正序推送")
-            print(f"[{datetime.now():%H:%M:%S}] 回溯补抓共补回 {len(got_all)} 条{tail}。")
-        return got_all
+                self._bf_page[key] = last_page - 1
+                self._bf_got[key] = 0
+                self._bf_fail[key] = 0
+                q.append(key)
+        self._bf_queue = q
+        print(f"[{datetime.now():%H:%M:%S}] 回溯补抓：{len(q)} 个目标排队，"
+              f"每轮翻 1 页慢慢补（不减深度，翻不动的下轮重试）。")
+
+    def _backfill(self, targets, all_posts):
+        """启动后把漏抓的发言补回来——**分片执行**：每轮只翻 1 页。
+
+        ⚠️ 2026-10-24 改为分片，原因：一次跑完要在几分钟内连发 17 组合 × 3 页
+        ≈ 51 次翻页请求，从第一个组合就开始吃 NGA 302 风控，结果一条都补不回
+        （实测 8 个组合全部 302）。用户定调「回溯对耗时不敏感，但不能少」，所以：
+          - 每轮只发 **1 次**翻页请求（和常规抓取一起，一分钟总共十几个请求，安全）；
+          - 翻不动（302）的页码**原样保留、下一轮重试**，不减少回溯深度；
+          - 每个组合翻够 50 条 / 碰到已抓过的 / 到第一页 才出队。
+
+        语义上仍然是「启动后做一次」——一次完整的扫描，不是定期反复回溯；
+        也不单开回溯服务/线程。全部出队后本函数自动空转。
+
+        返回本轮补回的发言列表（供调用方区分「补回的」与「常规新发言」）。
+        """
+        if self._bf_queue is None:
+            self._bf_init(targets)
+        if not self._bf_queue:
+            return []
+        max_posts = int((self.config or {}).get("backfill_max_posts")
+                        or BACKFILL_MAX_POSTS)
+        key = self._bf_queue[0]
+        tid, aid = key
+        page = self._bf_page.get(key)
+        if not page or page < 1:
+            self._bf_queue.pop(0)
+            return []
+        with self.lock:
+            known = {p["pid"] for p in self.posts
+                     if str(p.get("tid")) == str(tid)
+                     and str(p.get("authorid")) == str(aid)}
+        time.sleep(BACKFILL_PAGE_DELAY)
+        got, stop, next_page = self.backfill_one_page(
+            tid, aid, page, known, max_posts=max_posts,
+            already=self._bf_got.get(key, 0))
+
+        if not got and not stop:
+            # 这一页没拿到（网络/风控）：页码不变，下轮重试
+            self._bf_fail[key] = self._bf_fail.get(key, 0) + 1
+            if self._bf_fail[key] >= BACKFILL_MAX_FAILS:
+                print(f"[{datetime.now():%H:%M:%S}] 回溯 tid={tid} uid={aid} "
+                      f"page={page} 连续失败 {self._bf_fail[key]} 次，跳过该目标。")
+                self._bf_queue.pop(0)
+            return []
+
+        self._bf_fail[key] = 0
+        self._bf_got[key] = self._bf_got.get(key, 0) + len(got)
+        if stop or next_page < 1:
+            self._bf_queue.pop(0)
+            print(f"[{datetime.now():%H:%M:%S}] 回溯完成 tid={tid} uid={aid}："
+                  f"共补回 {self._bf_got[key]} 条（还剩 {len(self._bf_queue)} 个目标）。")
+        else:
+            self._bf_page[key] = next_page
+        if got:
+            all_posts.extend(got)
+            print(f"[{datetime.now():%H:%M:%S}] 回溯补抓 tid={tid} uid={aid} "
+                  f"page={page}：补回 {len(got)} 条漏抓的发言。")
+        return got
 
     def _is_pushable(self, p, abs_floor):
         """判断一条「缓存里没有的」发言到底该不该推企微。
@@ -1016,16 +1061,15 @@ class NgaMonitor:
                 except Exception as e:
                     errors.append(f"tid={tid},uid={aid}: 抓取失败 {e}")
 
-        # 回溯补抓：**只在启动后做一次**（用户 2026-10-16 定的规则），
-        # 不再定期反复跑、也不单开服务。放在**第 2 轮**而不是紧跟第 1 轮：
-        # 第 1 轮刚打完 14 个请求，紧接着翻页必吃 NGA 302 风控（实测），
-        # 隔一轮再翻成功率明显更高。
-        # 必须已有历史缓存（seeded）才做——首次运行没有「上次抓到哪」的基准。
+        # 回溯补抓：启动后做**一次完整扫描**（用户 2026-10-16 定的规则，
+        # 不单开服务/线程、也不定期反复）。2026-10-24 起改为**分片执行**：
+        # 每轮只翻 1 页，翻不动的下轮重试，语义不变、但不会因密集翻页被风控
+        # 打挂（详见 _backfill）。放在**第 2 轮**开始，避开第 1 轮刚打完十几个
+        # 请求的风控窗口。必须已有历史缓存（seeded）才做——首次运行没有基准。
         backfilled_pids = set()
         if do_backfill:
             self.rounds += 1
-            if not self.backfilled and self.seeded and self.rounds >= 2:
-                self.backfilled = True
+            if self.seeded and self.rounds >= 2:
                 for p in self._backfill(targets, all_posts):
                     backfilled_pids.add(p["pid"])
 
