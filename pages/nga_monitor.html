@@ -54,7 +54,14 @@
  .targets{display:flex;flex-direction:column;gap:10px;margin-bottom:6px}
  .target-card{background:#06101c;border:1px solid var(--line);border-radius:11px;padding:11px 12px}
  .target-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px}
- .target-head .idx{font-size:12px;color:var(--cyan);font-weight:600}
+ .target-head .idx{font-size:12px;color:var(--cyan);font-weight:600;flex:none}
+ /* 卡片头上的帖子标题：单行不换行，过长省略（配置区只填了一串 id，看不出谁是谁） */
+ .target-head .tt{font-size:12px;color:var(--blue);margin-left:10px;flex:1;min-width:0;
+   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .target-head .tt.unknown{color:var(--muted);opacity:.65}
+ /* 作者 ID 输入框下方的作者名 */
+ .target-card .nm{font-size:11px;color:var(--blue);word-break:break-all}
+ .target-card .nm.unknown{color:var(--muted);opacity:.65}
  .target-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
  @media(max-width:560px){ .target-grid{grid-template-columns:1fr} }
  .del-btn{background:transparent;border:1px solid rgba(255,107,107,0.4);color:var(--red);
@@ -209,6 +216,60 @@
     }catch(e){ return false; }
   }
 
+  // ---- 目标卡片的「帖子标题 / 作者名」显示 ----
+  // 配置区只填了一串数字，看不出谁是谁：先查后端 /api/resolve 反查名字，
+  // 结果存 localStorage，后端没起（或该 tid 抓不动）时也能显示上次查到的名字。
+  const NAME_KEY='nga_names_v1';
+  function loadNames(){
+    try{ const o=JSON.parse(localStorage.getItem(NAME_KEY));
+      return { titles:(o&&o.titles)||{}, users:(o&&o.users)||{} };
+    }catch(e){ return {titles:{},users:{}}; }
+  }
+  function saveNames(n){ try{ localStorage.setItem(NAME_KEY, JSON.stringify(n)); }catch(e){} }
+  function setNm(el, text, unknown){
+    if(!el) return;
+    el.textContent = text || '—';
+    el.classList.toggle('unknown', !!unknown);
+  }
+  function cardEls(i){
+    const card=targetsEl.children[i]; if(!card) return null;
+    return { tt:card.querySelector('[data-role=ttitle]'),
+             an:card.querySelector('[data-role=anames]') };
+  }
+  async function fetchNames(tid, aids){
+    try{
+      return await api('/api/resolve?tid='+encodeURIComponent(tid)
+        +'&uids='+encodeURIComponent((aids||[]).join(',')));
+    }catch(e){ return null; }   // 后端没起：静默，退回用缓存里的名字
+  }
+  function paintNames(i){
+    const t=targets[i]; if(!t) return;
+    const els=cardEls(i); if(!els) return;
+    const aids=(t.aids||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const cache=loadNames();
+    const title=cache.titles[t.tid]||'';
+    setNm(els.tt, title, !title);                       // 先用缓存立刻显示
+    const names=aids.map(u=>cache.users[u]||'').filter(Boolean);
+    setNm(els.an, names.join('、'), !names.length);
+    if(!t.tid) return;
+    fetchNames(t.tid, aids).then(r=>{
+      const e2=cardEls(i); if(!e2) return;
+      const c=loadNames();
+      if(r&&r.title) c.titles[t.tid]=r.title;
+      if(r&&r.users) Object.keys(r.users).forEach(u=>{ if(r.users[u]) c.users[u]=r.users[u]; });
+      saveNames(c);
+      const tl=c.titles[t.tid]||'';
+      const ns=aids.map(u=>c.users[u]||'').filter(Boolean);
+      setNm(e2.tt, tl || (r?'（未识别）':''), !tl);
+      setNm(e2.an, ns.join('、') || (r?'（未识别）':''), !ns.length);
+    });
+  }
+  let _nmTimers={};
+  function scheduleResolve(i){
+    clearTimeout(_nmTimers[i]);
+    _nmTimers[i]=setTimeout(()=>paintNames(i), 700);     // 防抖：别边打边请求
+  }
+
   // 渲染监控目标卡片
   function renderTargets(){
     targetsEl.innerHTML='';
@@ -216,19 +277,21 @@
       const card=document.createElement('div'); card.className='target-card';
       const head=document.createElement('div'); head.className='target-head';
       const idx=document.createElement('span'); idx.className='idx'; idx.textContent='帖子 '+(i+1);
+      const tt=document.createElement('span'); tt.className='tt'; tt.dataset.role='ttitle';
       const del=document.createElement('button'); del.className='del-btn'; del.textContent='删除';
       del.onclick=()=>{ targets.splice(i,1); if(!targets.length) targets=[{tid:'',aids:''}]; renderTargets(); saveCfg(); validate(); };
-      head.appendChild(idx); head.appendChild(del);
+      head.appendChild(idx); head.appendChild(tt); head.appendChild(del);
       const grid=document.createElement('div'); grid.className='target-grid';
       const l1=document.createElement('label'); l1.innerHTML='帖子 ID (tid)<input placeholder="帖子 ID" inputmode="numeric">';
-      const l2=document.createElement('label'); l2.innerHTML='作者 ID<input placeholder="作者 ID，多个用逗号分隔">';
+      const l2=document.createElement('label'); l2.innerHTML='作者 ID<input placeholder="作者 ID，多个用逗号分隔"><small class="nm" data-role="anames"></small>';
       const inTid=l1.querySelector('input'); inTid.value=t.tid;
       const inAids=l2.querySelector('input'); inAids.value=t.aids;
-      inTid.oninput=()=>{ targets[i].tid=inTid.value.trim(); saveCfg(); validate(); };
-      inAids.oninput=()=>{ targets[i].aids=inAids.value.trim(); saveCfg(); validate(); };
+      inTid.oninput=()=>{ targets[i].tid=inTid.value.trim(); saveCfg(); validate(); scheduleResolve(i); };
+      inAids.oninput=()=>{ targets[i].aids=inAids.value.trim(); saveCfg(); validate(); scheduleResolve(i); };
       grid.appendChild(l1); grid.appendChild(l2);
       card.appendChild(head); card.appendChild(grid);
       targetsEl.appendChild(card);
+      paintNames(i);
     });
   }
 
@@ -487,7 +550,7 @@
   if(!targets.length) targets=[{tid:'',aids:''}];   // 保证至少一张目标卡片可填
   renderTargets();
   validate();
-  connect().then(on=>{ if(on) refresh(); });
+  connect().then(on=>{ if(on){ refresh(); targets.forEach((_,i)=>paintNames(i)); } });
 })();
 </script>
 </body>

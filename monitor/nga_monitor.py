@@ -590,6 +590,7 @@ class NgaMonitor:
         self.last_push = 0
         self.seeded = False
         self.thread_titles = {}   # tid(str) -> 帖子标题
+        self._name_cache = {}     # (tid, uids元组) -> 解析结果，供 /api/resolve 复用
         self.running = True
         self.startup_pushed = False  # 启动推送（开启/恢复通知）只发一次
         self.backfilled = False      # 停机回溯补抓只在启动后第一轮做
@@ -743,6 +744,53 @@ class NgaMonitor:
             return self._fetch_author_posts_html(tid, authorid, page)
         except json.JSONDecodeError:
             return self._fetch_author_posts_html(tid, authorid, page)
+
+    def resolve_names(self, tid, uids):
+        """把 tid / 作者 UID 反查成「帖子标题 + 作者名」，供页面配置区显示。
+
+        配置区只填了一串数字，根本看不出谁是谁，所以页面每次渲染目标卡片时
+        调一次 /api/resolve 把名字查出来（页面自己再存 localStorage 兜底）。
+
+        节流：先查本地已有的（thread_titles / 已抓到的发言），缺的才发一次
+        网络请求；结果按 (tid, uids) 缓存，同一组合只查一次。
+        """
+        tid = str(tid).strip()
+        uids = [str(u).strip() for u in (uids or []) if str(u).strip()]
+        key = (tid, tuple(sorted(uids)))
+        with self.lock:
+            hit = self._name_cache.get(key)
+        if hit:
+            return hit
+
+        title = self.thread_titles.get(tid, "")
+        users, err = {}, ""
+        with self.lock:
+            for p in self.posts:
+                if str(p.get("tid")) != tid:
+                    continue
+                if not title and p.get("thread_title"):
+                    title = p["thread_title"]
+                aid, au = p.get("authorid"), p.get("author")
+                if aid and au:
+                    users[str(aid)] = au
+        missing = [u for u in uids if u not in users]
+        if uids and (missing or not title):
+            aid = missing[0] if missing else uids[0]
+            try:
+                posts, _ = self.fetch_author_posts(tid, aid, 9999)
+                title = title or self.thread_titles.get(tid, "") or ""
+                for p in posts:
+                    if p.get("authorid") and p.get("author"):
+                        users[str(p["authorid"])] = p["author"]
+                    if not title and p.get("thread_title"):
+                        title = p["thread_title"]
+            except Exception as e:
+                err = str(e)
+        res = {"ok": True, "tid": tid, "title": title or "",
+               "users": users, "error": err}
+        with self.lock:
+            self._name_cache[key] = res
+        return res
 
     def _fetch_author_posts_html(self, tid, authorid, page=9999):
         """兜底：用标准 HTML 页面（即浏览器访问的页面）抓取该作者某一页。"""
@@ -1329,6 +1377,16 @@ def make_handler(monitor):
                 status = dict(status or {})
                 status["cached"] = len(disk_posts)
                 self._send_json({"status": status, "posts": disk_posts})
+            elif path == "/api/resolve":
+                # 页面配置区用：把 tid / 作者 UID 反查成标题与作者名（带缓存与节流）
+                qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                tid = (qs.get("tid") or [""])[0].strip()
+                uids = [u.strip() for u in
+                        (qs.get("uids") or [""])[0].split(",") if u.strip()]
+                if not tid:
+                    self._send_json({"ok": False, "error": "缺少 tid"}, 400)
+                    return
+                self._send_json(monitor.resolve_names(tid, uids))
             elif path == "/api/status":
                 self._send_json(monitor.snapshot().get("status"))
             elif path == "/api/config":
