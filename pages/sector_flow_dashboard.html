@@ -490,7 +490,7 @@ function statusText(d){if(!isTradingDay(d))return "⚪ 非交易日（最近收�
   if(t>690&&t<780)return "🟡 午间休市";return "🔵 盘前/已收盘";}
 
 /* ============ 主刷新 ============ */
-let nextAt=0,busy=false;
+let nextAt=0,busy=false,failStreak=0;
 function fmt(v){return (v>=0?"+":"")+v.toFixed(1)+"亿";}
 async function refresh(){
   if(busy)return;busy=true;
@@ -556,9 +556,17 @@ async function refresh(){
     document.getElementById("updated").textContent=now.toLocaleTimeString("zh-CN");
     document.getElementById("lastt").textContent=lastT;
     document.getElementById("modTime").innerHTML=`更新 ${now.toLocaleTimeString("zh-CN")}<br>截至 ${lastT} · ${stxt}`;
+    failStreak=0;
     nextAt=Date.now()+CFG.intervalSec*1000;
   }catch(e){
-    document.getElementById("status").textContent="❌ 抓取失败："+e.message+"（已尝试多个东财域名均失败，检查网络/代理）";
+    /* 必须重设 nextAt：否则它保持 ≤0 的旧值，tick() 每秒都会再触发一次 refresh，
+       形成每秒一次的重试风暴，直接把出口 IP 打到被东财风控封禁（表现为所有 push2 域名全部空响应）。
+       这里按连续失败次数指数退避，上限 15 分钟，给限流留出恢复时间。*/
+    failStreak++;
+    const wait=Math.min(Math.round(CFG.intervalSec*Math.pow(2,failStreak-1)),900);
+    nextAt=Date.now()+wait*1000;
+    document.getElementById("status").textContent=
+      "❌ 抓取失败："+e.message+"（"+wait+"秒后重试 · 连续失败"+failStreak+"次）";
   }finally{busy=false;}
 }
 function tick(){if(nextAt){let s=Math.max(0,Math.round((nextAt-Date.now())/1000));
