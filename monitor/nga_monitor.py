@@ -88,7 +88,7 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 # 启动监控后做**一次**回溯：从该作者末页的前一页开始往前翻，
 #   1. 累计翻到 BACKFILL_MAX_POSTS 条就停（注意是**条数**不是页数，可配置）；
 #   2. 中途碰到「已经抓过的发言」（pid 在缓存里）也立刻停——说明断档到头了；
-#   3. 补回来的发言按时间正序推送。
+#   3. 补回来的发言不按页推：整轮回溯扫完后统一按时间正序推送。
 # 不再单独跑回溯服务/线程，也不再定期反复回溯。
 BACKFILL_MAX_POSTS = 50          # 往前最多回溯多少**条**（--backfill-posts 可配）
 
@@ -99,6 +99,9 @@ BACKFILL_PAGE_DELAY = 2.0
 # **不减少深度**，页码原样保留、下一轮重试；只有连续失败到这个次数
 # （说明该页确实取不到，多半是帖子权限问题）才跳过。
 BACKFILL_MAX_FAILS = 10
+
+# 整轮回溯结束后批量推送的间隔：企微限频 20 条/分钟，摊开发避免被丢弃。
+BACKFILL_PUSH_DELAY = 4.0
 
 # 常规轮询里每个 (帖子, 作者) 之间的间隔。站点风控看的是**速率**——
 # 一口气 2 次/秒连发十几次必吃 302，摊成 0.5 次/秒则完全没事。因此宁可把一轮的
@@ -601,6 +604,9 @@ class NgaMonitor:
         self._bf_page = {}           # (tid, aid) -> 下一页要翻的页码
         self._bf_got = {}            # (tid, aid) -> 已补回条数
         self._bf_fail = {}           # (tid, aid) -> 连续失败次数
+        # 回溯补回的发言先攒着，等整轮扫完再统一按时间正序推；落盘以防重启丢待推批次
+        self._bf_pending = []
+        self._bf_flushed = False
         self.rounds = 0              # 已执行的轮询轮数（用于定期回溯）
         self.last_pages = {}         # (tid, 作者) -> 该作者末页页码（本轮抓取时更新）
         # 回溯补回的发言是否推送企微。仅在「清理历史存量断档」时用
@@ -653,6 +659,9 @@ class NgaMonitor:
             with self.lock:
                 self.posts = posts
                 self.seen_pids = {str(p.get("pid")) for p in posts if p.get("pid")}
+                # 上次退出前还没来得及统一推送的补回发言，从存档接回来继续推
+                self._bf_pending = [p for p in (data.get("pending_backfill") or [])
+                                    if isinstance(p, dict) and p.get("pid")]
                 for p in posts:
                     # 用最新 clean_text 重新生成 content_text（修复历史缓存里被旧规则清空/带标记的脏数据）
                     if "content" in p:
@@ -960,7 +969,8 @@ class NgaMonitor:
         语义上仍然是「启动后做一次」——一次完整的扫描，不是定期反复回溯；
         也不单开回溯服务/线程。全部出队后本函数自动空转。
 
-        返回本轮补回的发言列表（供调用方区分「补回的」与「常规新发言」）。
+        返回本轮补回的发言列表。调用方把它们暂存起来，等队列清空（整轮扫完）
+        再统一按时间正序推送——翻页是从新往旧走的，逐页推会让整体顺序倒过来。
         """
         if self._bf_queue is None:
             self._bf_init(targets)
@@ -1035,8 +1045,9 @@ class NgaMonitor:
 
     def check_once(self, do_push_startup=True, do_backfill=True):
         # 推送判新基准：**只看时间下限**，不再区分新/老组合。ts 解析不出的一律不推。
-        max_age_h = int((self.config or {}).get("push_max_age_hours")
-                        or PUSH_MAX_AGE_HOURS)
+        # 0 表示不限；不能用 or 回落默认值，否则页面配 0 会被当成默认的 7 天
+        raw_age = (self.config or {}).get("push_max_age_hours")
+        max_age_h = PUSH_MAX_AGE_HOURS if raw_age is None else int(raw_age)
         abs_floor = (time.time() - max_age_h * 3600) if max_age_h > 0 else 0
 
         targets = self._resolve_ids()
@@ -1062,11 +1073,20 @@ class NgaMonitor:
         # 翻页被风控打挂（详见 _backfill）。放在**第 2 轮**开始，避开第 1 轮刚打完十几个
         # 请求的风控窗口。必须已有历史缓存（seeded）才做——首次运行没有基准。
         backfilled_pids = set()
+        flush_batch = []
         if do_backfill:
             self.rounds += 1
             if self.seeded and self.rounds >= 2:
                 for p in self._backfill(targets, all_posts):
                     backfilled_pids.add(p["pid"])
+                    self._bf_pending.append(p)
+                # 队列清空 = 整轮扫完。翻页是从新往旧走的，逐页推会让整体顺序
+                # 倒过来，所以补回的先攒着，扫完再统一按时间正序推送。
+                if (self._bf_queue is not None and not self._bf_queue
+                        and not self._bf_flushed):
+                    self._bf_flushed = True
+                    flush_batch = list(self._bf_pending)
+                    self._bf_pending = []
 
         by_pid = {}
         for p in all_posts:
@@ -1104,11 +1124,10 @@ class NgaMonitor:
                 if self.config.get("monitor_enabled") and new_posts:
                     pushed_n = 0
                     for p in sorted(new_posts, key=lambda x: x["ts"]):
-                        # --no-backfill-push：补回的历史断档只入库、不推企微
-                        if self.no_backfill_push and p["pid"] in backfilled_pids:
+                        # 回溯补回的只入库，攒到整轮扫完再统一按时间正序推
+                        if p["pid"] in backfilled_pids:
                             continue
-                        # 只推「比该作者已知最新一条更新」的发言；回溯/存档缺失翻
-                        # 出来的老帖在这里被拦下，只入库不推送（页面照样能看）
+                        # 时间门槛：超期老帖只入库不推送（页面照样能看）
                         if not self._is_pushable(p, abs_floor):
                             continue
                         print(f"[{datetime.now():%H:%M:%S}] 新发言 uid={p['authorid']} pid={p['pid']} -> 推送")
@@ -1118,12 +1137,30 @@ class NgaMonitor:
                     self.last_push = time.time()
                     silent = len(new_posts) - pushed_n
                     print(f"[{datetime.now():%H:%M:%S}] 本轮新增 {len(new_posts)} 条，"
-                          f"已推送 {pushed_n} 条" + (f"（{silent} 条补回的静默入库）" if silent else "") + "。")
+                          f"已推送 {pushed_n} 条" + (f"（{silent} 条暂存/超期未推）" if silent else "") + "。")
 
             # 启动推送（开启/恢复通知）只发一次；未配置 webhook 或 --test 调试模式安全跳过
             if do_push_startup and not self.startup_pushed:
                 self.push_startup(targets)
                 self.startup_pushed = True
+
+        # 整轮回溯扫完：补回的发言统一按时间正序推送。放在锁外——批量推送
+        # 之间有间隔，长时间占着锁会卡住页面读数据。
+        if flush_batch and self.no_backfill_push:
+            print(f"[{datetime.now():%H:%M:%S}] 回溯结束：{len(flush_batch)} 条补回发言"
+                  f"因 --no-backfill-push 只入库、不推送。")
+        elif flush_batch and self.config.get("monitor_enabled"):
+            pushable = [p for p in sorted(flush_batch, key=lambda x: x.get("ts") or 0)
+                        if self._is_pushable(p, abs_floor)]
+            for i, p in enumerate(pushable):
+                print(f"[{datetime.now():%H:%M:%S}] 补回发言 uid={p['authorid']} "
+                      f"pid={p['pid']} -> 推送")
+                push_post(p)
+                self.last_push = time.time()
+                if i < len(pushable) - 1:
+                    time.sleep(BACKFILL_PUSH_DELAY)
+            print(f"[{datetime.now():%H:%M:%S}] 回溯结束：{len(flush_batch)} 条补回发言"
+                  f"按时间正序推送 {len(pushable)} 条。")
         self.save_cache()
 
     def push_startup(self, targets):
@@ -1202,6 +1239,8 @@ class NgaMonitor:
                 data = {
                     "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "posts": posts,
+                    # 待按时间正序统一推送的补回发言，重启后接着推（不丢这一批）
+                    "pending_backfill": list(self._bf_pending),
                 }
                 text = json.dumps(data, ensure_ascii=False, indent=2)
                 mem_count = len(posts)
