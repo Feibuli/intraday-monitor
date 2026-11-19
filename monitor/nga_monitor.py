@@ -583,66 +583,83 @@ def push_post(post):
 
 
 def push_gap_report(posts, floor):
-    """把一批断档发言汇总成一条企微消息，按作者分组、每组带可点开的 NGA 链接。
+    """断档发言按帖子合并推送：同一帖子的发言合并成一条，标题接帖子标题和
+    时间范围，正文按作者逐条列出（作者名带过滤视图链接、无时间）。
 
     断档 = 启动前发的、缓存里没有的发言（末页抓到的 + 回溯翻页补回的）。逐条
-    推会刷屏且受企微限频拖很久，这里压成一条：每个作者一行，给出条数、最新
-    一句摘要和作者过滤视图链接（发言自带 url），完整正文留在监控页面。
-
-    floor 是时间下限，早于它的只入库不进补报；返回是否推送成功。
+    推会刷屏，这里按 tid 分组：每个帖子一条消息，组内按时间正序；单条超过
+    企微 markdown 4096 字节上限就拆成多条（每片都带标题、标 [i/n]），单条
+    正文自身超限则尾部截断。floor 是时间下限，早于它的只入库不进补报；
+    返回是否全部推送成功。
     """
     if not posts:
         return False
 
-    groups = {}       # authorid -> {name, count, latest}
+    threads = {}      # tid -> {"title": 帖子标题, "items": [发言]}
     for p in posts:
         ts = p.get("ts") or 0
         if ts <= 0 or ts < floor:
             continue
-        aid = str(p.get("authorid") or "?")
-        g = groups.setdefault(aid, {"name": p.get("author") or f"UID {aid}",
-                                    "count": 0, "latest": None})
-        g["count"] += 1
-        if g["latest"] is None or ts >= (g["latest"].get("ts") or 0):
-            g["latest"] = p
-    if not groups:
+        tid = str(p.get("tid") or "?")
+        th = threads.setdefault(tid, {"title": "", "items": []})
+        th["items"].append(p)
+        if not th["title"] and p.get("thread_title"):
+            th["title"] = p["thread_title"]
+    if not threads:
         return False
 
-    valid = sorted((p for p in posts if 0 < (p.get("ts") or 0) and p["ts"] >= floor),
-                   key=lambda x: x["ts"])
+    MAX = 4096
+    sep = "\n> \n"    # 作者回复之间用空引用行分隔
+
     def _fmt(ts):
         return datetime.fromtimestamp(ts).strftime("%m-%d %H:%M")
-    head = (f"📋 NGA 断档补报\n"
-            f"时间：{_fmt(valid[0]['ts'])} ~ {_fmt(valid[-1]['ts'])}"
-            f"（共 {len(valid)} 条）")
 
-    lines = []
-    for g in sorted(groups.values(), key=lambda g: g["latest"].get("ts") or 0,
-                    reverse=True):
-        latest = g["latest"]
-        url = latest.get("url") or ""
-        snippet = " ".join((latest.get("content_text") or "").split())
-        if len(snippet) > 40:
-            snippet = snippet[:40] + "…"
-        label = f"[{g['name']}]({url})" if url else g["name"]
-        lines.append(f"> {label}：{g['count']} 条 · 最新「{snippet}」")
+    all_ok = True
+    # 帖子间按最新发言时间倒序
+    for tid, th in sorted(
+            threads.items(),
+            key=lambda kv: max((p.get("ts") or 0) for p in kv[1]["items"]),
+            reverse=True):
+        items = sorted(th["items"], key=lambda x: x.get("ts") or 0)
+        title = th["title"] or f"tid {tid}"
+        head = (f"📋 NGA 回溯 · {title}\n"
+                f"时间：{_fmt(items[0]['ts'])} ~ {_fmt(items[-1]['ts'])}"
+                f"（{len(items)} 条）\n")
 
-    # 企微 markdown 正文 4096 字节上限：按作者整行取舍，超了就在末尾标注省略数
-    tail = "完整内容见监控页面"
-    max_bytes = 4096
-    used = len((head + "\n" + tail).encode("utf-8"))
-    kept = []
-    for ln in lines:
-        size = len((ln + "\n").encode("utf-8"))
-        if used + size > max_bytes - 64:       # 预留给省略提示行
-            break
-        kept.append(ln)
-        used += size
-    omitted = len(lines) - len(kept)
-    body = "\n".join(kept)
-    if omitted:
-        body += f"\n> ……另有 {omitted} 位作者，详见监控页面"
-    return send_wecom_msg(head + "\n" + body + "\n" + tail)
+        blocks = []
+        for p in items:
+            name = p.get("author") or f"UID {p.get('authorid') or '?'}"
+            url = p.get("url") or ""
+            label = f"[{name}]({url})" if url else name
+            text = (p.get("content_text") or clean_text(p.get("content", ""))).strip()
+            if not text:
+                text = "（无文字内容，点链接查看）"
+            blocks.append(f"> {label}：" + "\n> ".join(text.split("\n")))
+
+        # 每片都要带 head 和 [i/n] 标识，预留其字节后打包正文块
+        reserve = len((head + " [99/99]\n").encode("utf-8")) + 16
+        budget = MAX - reserve
+        packed, cur, cur_bytes = [], [], 0
+        for b in blocks:
+            size = len(b.encode("utf-8"))
+            if size > budget:            # 单条正文就超长：尾部截断
+                b = b.encode("utf-8")[:budget - 4].decode("utf-8", "ignore") + "…"
+                size = len(b.encode("utf-8"))
+            add = size + (len(sep.encode("utf-8")) if cur else 0)
+            if cur and cur_bytes + add > budget:
+                packed.append(cur)
+                cur, cur_bytes, add = [], 0, size
+            cur.append(b)
+            cur_bytes += add
+        if cur:
+            packed.append(cur)
+
+        n = len(packed)
+        for i, part in enumerate(packed, 1):
+            suffix = f" [{i}/{n}]" if n > 1 else ""
+            ok = send_wecom_msg(head + suffix + "\n" + sep.join(part))
+            all_ok = all_ok and ok
+    return all_ok
 
 
 
@@ -1205,7 +1222,7 @@ class NgaMonitor:
                             push_post(p)
                             pushed_n += 1
                         else:
-                            # 启动前断档：攒进补报池，整轮扫完汇总成一条
+                            # 启动前断档：攒进补报池，整轮扫完按帖子合并推送
                             self._bf_pending.append(p)
                             gap_n += 1
                     self.seen_pids.update(p["pid"] for p in new_posts)
@@ -1219,7 +1236,7 @@ class NgaMonitor:
                 self.push_startup(targets)
                 self.startup_pushed = True
 
-        # 整轮结束：断档（回溯补回 + 启动前实时抓到的）汇总成一条补报推送。
+        # 整轮结束：断档（回溯补回 + 启动前实时抓到的）按帖子合并推送。
         # 放在锁外，避免占锁卡住页面读数据。
         # 回溯开启时，扫完那一轮锁内新抓到的断档 append 在快照之后，这里并进来兜底。
         report_batch = list(flush_batch)
@@ -1233,7 +1250,7 @@ class NgaMonitor:
             ok = push_gap_report(report_batch, backfill_floor)
             if ok:
                 self.last_push = time.time()
-            print(f"[{datetime.now():%H:%M:%S}] 断档 {len(report_batch)} 条汇总补报"
+            print(f"[{datetime.now():%H:%M:%S}] 断档 {len(report_batch)} 条按帖子合并回溯"
                   f"（{'已推送' if ok else '未推送'}）。")
         self.save_cache()
 
