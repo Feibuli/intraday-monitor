@@ -1211,6 +1211,7 @@
             const indexChartTriggerTitle = '\u70b9\u51fb\u653e\u5927\u67e5\u770b\u6307\u6570\u56fe\u8868';
             const chartPopoverRef = ref(null);
             let autoRefreshTimer = null;
+            const shellActive = ref(true);   // 聚合台是否把本页切到前台
             let isFetchingIndexOverview = false;
             let userSorted = false;
             const HOVER_CHART_DELAY_MS = 450;
@@ -1804,7 +1805,7 @@
                 stopAutoRefresh();
                 if (!autoRefreshEnabled.value) return;
                 autoRefreshTimer = setInterval(() => {
-                    if (isTradingTime()) refreshAllPrices(true);
+                    if (shellActive.value && isTradingTime()) refreshAllPrices(true);
                 }, autoRefreshIntervalSec.value * 1000);
             };
 
@@ -1819,6 +1820,19 @@
                 persistAutoRefreshSettings();
                 startAutoRefresh();
             };
+            /* 聚合台切换到后台时暂停轮询：display:none 不停 JS 定时器，需由外壳显式通知，
+               否则离开页面后后台仍在持续请求，容易把共享出口 IP 打到被风控封禁 */
+            const onShellMessage = (e) => {
+                const d = e.data;
+                if (!d || d.source !== 'shell') return;
+                const was = shellActive.value;
+                shellActive.value = !!d.active;
+                if (shellActive.value && !was && autoRefreshEnabled.value && isTradingTime()) {
+                    refreshAllPrices(true);   // 切回前台立即补一次
+                }
+            };
+            window.addEventListener('message', onShellMessage);
+            onUnmounted(() => window.removeEventListener('message', onShellMessage));
 
             const getAutoRefreshStatusText = () => {
                 if (!autoRefreshEnabled.value) return '(自动刷新已关闭)';

@@ -569,9 +569,18 @@ async function refresh(){
       "❌ 抓取失败："+e.message+"（"+wait+"秒后重试 · 连续失败"+failStreak+"次）";
   }finally{busy=false;}
 }
-function tick(){if(nextAt){let s=Math.max(0,Math.round((nextAt-Date.now())/1000));
-  document.getElementById("countdown").textContent=Math.floor(s/60)+"分"+pad2(s%60)+"秒";
-  if(s<=0&&!busy)refresh();}}
+function tick(){if(!nextAt)return;
+  if(pageActive){let s=Math.max(0,Math.round((nextAt-Date.now())/1000));
+    document.getElementById("countdown").textContent=Math.floor(s/60)+"分"+pad2(s%60)+"秒";}
+  if(nextAt-Date.now()<=0&&!busy&&pageActive)refresh();}
+/* 聚合台切换到后台时暂停轮询：display:none 不停 JS 定时器，需由外壳显式通知，
+   否则离开页面后后台仍在持续请求，容易把共享出口 IP 打到被风控封禁 */
+let pageActive=true;
+window.addEventListener("message",e=>{
+  const d=e.data;if(!d||d.source!=="shell")return;
+  const was=pageActive;pageActive=!!d.active;
+  if(pageActive&&!was&&nextAt-Date.now()<=0&&!busy)refresh();   // 切回前台立即补一次
+});
 
 /* 同步模式 UI：hero 徽章 + 切换按钮都醒目显示当前是行业还是概念 */
 function syncKind(){

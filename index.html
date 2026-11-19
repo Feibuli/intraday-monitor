@@ -108,11 +108,11 @@
     item.addEventListener('click', function(){ activate(p.id); });
     nav.appendChild(item);
 
-    // 预加载 iframe（display 切换，保留各页面状态）
+    // 延迟加载 iframe：src 暂存到 dataset，首次切换到该页时才真正加载
     const f = document.createElement('iframe');
     f.className = 'frame' + (i === 0 ? ' active' : '');
     f.dataset.id = p.id;
-    f.src = p.src;
+    f.dataset.src = p.src;
     f.setAttribute('allowfullscreen', '');
     main.appendChild(f);
   });
@@ -127,14 +127,30 @@
     main.appendChild(e);
   }
 
+  /* 通知子页面是否处于前台：display:none 不会停掉 JS 定时器，
+     需由外壳显式通知，否则离开页面后轮询仍在后台持续消耗共享出口 IP */
+  function notifyActive(el, active){
+    try{ el.contentWindow.postMessage({ source: 'shell', active: active }, '*'); }catch(e){}
+  }
   function activate(id){
     document.querySelectorAll('.nav-item').forEach(function(el){
       el.classList.toggle('active', el.dataset.id === id);
     });
     document.querySelectorAll('.frame').forEach(function(el){
-      el.classList.toggle('active', el.dataset.id === id);
+      const on = el.dataset.id === id;
+      el.classList.toggle('active', on);
+      if(on && el.dataset.src){
+        // 首次激活才加载：未打开过的页面完全不发起任何请求
+        el.src = el.dataset.src;
+        delete el.dataset.src;
+        // 载入完成时的前台状态以“当前是否可见”为准，避免加载期间又切走后误判为前台
+        el.addEventListener('load', function(){ notifyActive(el, el.classList.contains('active')); }, { once: true });
+        return;
+      }
+      notifyActive(el, on);
     });
   }
+  if (pages.length) activate(pages[0].id);   // 载入首屏页面并同步其前台状态
 
   // 底部时钟
   const clock = document.getElementById('clock');
