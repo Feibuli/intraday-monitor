@@ -976,8 +976,8 @@ class NgaMonitor:
             self._bf_init(targets)
         if not self._bf_queue:
             return []
-        max_posts = int((self.config or {}).get("backfill_max_posts")
-                        or BACKFILL_MAX_POSTS)
+        raw_bf = (self.config or {}).get("backfill_max_posts")
+        max_posts = BACKFILL_MAX_POSTS if raw_bf is None else max(0, int(raw_bf))
         key = self._bf_queue[0]
         tid, aid = key
         page = self._bf_page.get(key)
@@ -1074,7 +1074,9 @@ class NgaMonitor:
         # 请求的风控窗口。必须已有历史缓存（seeded）才做——首次运行没有基准。
         backfilled_pids = set()
         flush_batch = []
-        if do_backfill:
+        raw_bf = (self.config or {}).get("backfill_max_posts")
+        bf_limit = BACKFILL_MAX_POSTS if raw_bf is None else max(0, int(raw_bf))
+        if do_backfill and bf_limit > 0:
             self.rounds += 1
             if self.seeded and self.rounds >= 2:
                 for p in self._backfill(targets, all_posts):
@@ -1087,6 +1089,12 @@ class NgaMonitor:
                     self._bf_flushed = True
                     flush_batch = list(self._bf_pending)
                     self._bf_pending = []
+        elif do_backfill and self._bf_pending:
+            # 回溯已关闭：之前攒下还没推的补回批次也要按时间正序推掉，
+            # 不能因为关掉回溯就把这批消息吞掉。
+            self._bf_flushed = True
+            flush_batch = list(self._bf_pending)
+            self._bf_pending = []
 
         by_pid = {}
         for p in all_posts:
@@ -1553,8 +1561,8 @@ def main():
         cfg["refresh_interval"] = max(5, int(args.interval))
     if args.no_backfill_push:
         cfg["no_backfill_push"] = True
-    # 回溯条数上限（条，不是页）；页面/命令行都能改，默认 BACKFILL_MAX_POSTS
-    cfg["backfill_max_posts"] = max(0, int(args.backfill_posts or 0)) or BACKFILL_MAX_POSTS
+    # 回溯条数上限（条，不是页）；0 表示关闭回溯，不可用 or 回落默认值
+    cfg["backfill_max_posts"] = max(0, int(args.backfill_posts))
     # 推送时间门槛（小时）：设 0 = 不限，抓到没见过的就推
     cfg["push_max_age_hours"] = max(0, int(args.push_max_age_hours or 0))
     # 多帖子多作者：--target tid:aid1,aid2 可重复
