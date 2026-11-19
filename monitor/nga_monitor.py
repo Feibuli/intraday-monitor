@@ -599,6 +599,7 @@ class NgaMonitor:
         self._name_cache = {}     # (tid, uids元组) -> 解析结果，供 /api/resolve 复用
         self.running = True
         self.startup_pushed = False  # 启动推送（开启/恢复通知）只发一次
+        self.started_at = time.time()  # 本次进程启动时刻：实时发言的判新下限（断档不补推）
         # 回溯补抓的分片状态（2026-10-24：每轮只翻 1 页，慢慢补完，不减深度）
         self._bf_queue = None        # None=未初始化；[] 或 None 之外=待回溯的 (tid,aid) 队列
         self._bf_page = {}           # (tid, aid) -> 下一页要翻的页码
@@ -1016,39 +1017,38 @@ class NgaMonitor:
                   f"page={page}：补回 {len(got)} 条漏抓的发言。")
         return got
 
-    def _is_pushable(self, p, abs_floor):
-        """判断一条「缓存里没有的」发言到底该不该推企微。
+    def _is_pushable(self, p, floor):
+        """判断一条「缓存里没有的」发言该不该推企微：ts 不早于传入的 floor。
 
-        缓存里没有 ≠ 是新发言。存档一旦缺失（被清/损坏/换机器），回溯往前翻
-        出来的全是几个月前的老帖，pid 同样不在缓存里，会被当成新发言逐条推送。
-        所以推送前必须用时间判一道：
+        调用方按发言来源传不同的下限，两条路径互不混用：
+          - 实时新发言传 started_at（本次启动时刻）：启动前发的断档静默入库，
+            不推送。否则每次重启末页都会把停机期间的旧发言当新消息补推一遍。
+          - 回溯补回的发言传 time.time() - push_max_age_hours（默认 7 天，
+            页面「推送时间门槛」可配，0 = 不限）：真正翻旧页补回的老帖受此门槛。
 
-            **唯一判据 = 时间不早于绝对下限（启动时刻 - PUSH_MAX_AGE_HOURS，
-            默认 7 天，页面「推送时间门槛」可配，0 = 不限）。**
+        ts 解析不出的、早于下限的，一律只入库不推送（页面照样能看）。
 
-        不再区分新/老组合：新加的作者/帖子当轮就该推，否则加完半天没反应。
-        限制只有两个，且都在页面可配：
-          1. 回溯最多往前翻 50 条（--backfill-posts / 页面「启动时回溯条数」）；
-          2. 推送时间门槛 7 天（--push-max-age-hours / 页面「推送时间门槛」）。
-
-        ⚠️ 刻意**不**用「必须比该作者已知最新一条更新」做判据：停机断档补回的
-        发言恰恰早于已知最新一条（中间缺一段、更新的已经在库），那样会把真正
-        的漏抓也拦掉。7 天绝对下限已经足够挡住陈年旧帖，且不会误伤断档。
-        被拦下的发言照样入库，页面可查。
+        刻意不用「必须比该作者已知最新一条更新」做判据：停机断档补回的发言
+        恰恰早于已知最新一条，那样会把真正的漏抓也拦掉。
         """
         ts = p.get("ts") or 0
         if ts <= 0:
             print(f"[{datetime.now():%H:%M:%S}] 跳过推送 pid={p.get('pid')}："
                   f"发言时间解析失败，无法判断新旧（已入库）")
             return False
-        return ts >= abs_floor    # 超出硬下限（默认 7 天）的老帖只入库不推送
+        return ts >= floor
 
     def check_once(self, do_push_startup=True, do_backfill=True):
-        # 推送判新基准：**只看时间下限**，不再区分新/老组合。ts 解析不出的一律不推。
-        # 0 表示不限；不能用 or 回落默认值，否则页面配 0 会被当成默认的 7 天
+        # 两条推送路径各有各的时间下限，互不混用：
+        #  - 实时新发言（末页抓到、缓存里没有的）：只推本次进程启动之后发言的。
+        #    启动前发的断档静默入库、不推送——否则每次重启都会把停机期间的
+        #    旧发言当新消息补推一遍。下限 = started_at，不受时间门槛配置影响。
+        #  - 回溯补回的发言（翻旧页补的）：受 push_max_age_hours 门槛约束。
+        # 0 表示不限；不能用 or 回落默认值，否则页面配 0 会被当成默认 7 天
+        live_floor = self.started_at
         raw_age = (self.config or {}).get("push_max_age_hours")
         max_age_h = PUSH_MAX_AGE_HOURS if raw_age is None else int(raw_age)
-        abs_floor = (time.time() - max_age_h * 3600) if max_age_h > 0 else 0
+        backfill_floor = (time.time() - max_age_h * 3600) if max_age_h > 0 else 0
 
         targets = self._resolve_ids()
         all_posts, errors = [], []
@@ -1135,8 +1135,8 @@ class NgaMonitor:
                         # 回溯补回的只入库，攒到整轮扫完再统一按时间正序推
                         if p["pid"] in backfilled_pids:
                             continue
-                        # 时间门槛：超期老帖只入库不推送（页面照样能看）
-                        if not self._is_pushable(p, abs_floor):
+                        # 实时新发言：只推本次启动之后发言的，启动前的断档静默入库
+                        if not self._is_pushable(p, live_floor):
                             continue
                         print(f"[{datetime.now():%H:%M:%S}] 新发言 uid={p['authorid']} pid={p['pid']} -> 推送")
                         push_post(p)
@@ -1159,7 +1159,7 @@ class NgaMonitor:
                   f"因 --no-backfill-push 只入库、不推送。")
         elif flush_batch and self.config.get("monitor_enabled"):
             pushable = [p for p in sorted(flush_batch, key=lambda x: x.get("ts") or 0)
-                        if self._is_pushable(p, abs_floor)]
+                        if self._is_pushable(p, backfill_floor)]
             for i, p in enumerate(pushable):
                 print(f"[{datetime.now():%H:%M:%S}] 补回发言 uid={p['authorid']} "
                       f"pid={p['pid']} -> 推送")

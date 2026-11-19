@@ -130,8 +130,8 @@
         <label>NGA UID<small>ngaPassportUid，登录 NGA 后从浏览器 Cookie 获取</small><input id="f_uid" placeholder="NGA UID" autocomplete="off"></label>
         <label>NGA CID<small>ngaPassportCid</small><input id="f_cid" placeholder="NGA CID" autocomplete="off"></label>
         <label>刷新频率（秒）<input id="f_interval" type="number" value="60" min="5"></label>
-        <label>启动时回溯条数<small>每个作者最多往前翻多少条，碰到抓过的就停；0=不回溯</small><input id="f_backfill" type="number" value="50" min="0"></label>
-        <label>推送时间门槛（小时）<small>补回的发言超过这个岁数只入库不推送；0=不限</small><input id="f_pushage" type="number" value="168" min="0"></label>
+        <label id="lb_backfill">启动时回溯条数<small>每个作者最多往前翻多少条，碰到抓过的就停；0=不回溯</small><input id="f_backfill" type="number" value="50" min="0"></label>
+        <label id="lb_pushage">推送时间门槛（小时）<small>只对回溯补回的发言生效：超过这个岁数的老帖只入库不推送；0=不限。实时新发言不受此限制</small><input id="f_pushage" type="number" value="168" min="0"></label>
       </div>
 
       <h2 style="margin-top:16px">📌 监控目标（多个帖子可分别添加）</h2>
@@ -201,6 +201,8 @@
       localStorage.setItem(STORAGE_KEY, JSON.stringify(o));
     }catch(e){}
   }
+  // 时间门槛只对回溯生效：回溯关闭（条数 0）时隐藏该选项
+  function syncPushage(){ $('lb_pushage').style.display = (parseInt(f_bf.value,10)>0) ? '' : 'none'; }
   function loadCfg(){
     try{
       const s=localStorage.getItem(STORAGE_KEY); if(!s) return false;
@@ -209,6 +211,7 @@
       f_int.value=o.interval||'60';
       f_bf.value=(o.backfill===undefined||o.backfill==='')?BF_DEFAULT:o.backfill;
       f_pa.value=(o.pushage===undefined||o.pushage==='')?PA_DEFAULT:o.pushage;
+      syncPushage();
       targets = Array.isArray(o.targets) ? o.targets.map(t=>({tid:String(t.tid||''), aids:String(t.aids||'')})) : [];
       if(!targets.length) targets=[{tid:'',aids:''}];
       if(o.collapsed){ cfgBody.classList.add('collapsed'); toggleBtn.textContent='展开 ▼'; }
@@ -331,7 +334,7 @@
     const bf=parseInt(f_bf.value);
     if(!isNaN(bf)&&bf!==BF_DEFAULT) cmd+=' --backfill-posts='+Math.max(0,bf);
     const pa=parseInt(f_pa.value);
-    if(!isNaN(pa)&&pa!==PA_DEFAULT) cmd+=' --push-max-age-hours='+Math.max(0,pa);
+    if(bf>0 && !isNaN(pa)&&pa!==PA_DEFAULT) cmd+=' --push-max-age-hours='+Math.max(0,pa);
     return cmd;
   }
   const LAUNCH_TIP='启动命令已复制 ✅ 打开 cmd（命令提示符）→ 右键粘贴 → 回车，即可启动监控并推送企微';
@@ -361,6 +364,8 @@
 
   // 静态字段（UID/CID/频率）也要实时触发校验与存盘
   [f_uid,f_cid,f_int,f_bf,f_pa].forEach(el=>el.addEventListener('input',()=>{ saveCfg(); validate(); }));
+  f_bf.addEventListener('input', syncPushage);
+  syncPushage();
 
   async function connect(){
     BACKEND=await resolveBackend();
