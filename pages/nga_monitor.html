@@ -129,7 +129,7 @@
       <div class="grid">
         <label>NGA UID<small>ngaPassportUid，登录 NGA 后从浏览器 Cookie 获取</small><input id="f_uid" placeholder="NGA UID" autocomplete="off"></label>
         <label>NGA CID<small>ngaPassportCid</small><input id="f_cid" placeholder="NGA CID" autocomplete="off"></label>
-        <label>刷新频率（秒）<input id="f_interval" type="number" value="60" min="5"></label>
+        <label>刷新频率（秒）<small>每隔多少秒抓一次末页新发言；过密易触发站点风控</small><input id="f_interval" type="number" value="60" min="5"></label>
         <label id="lb_backfill">启动时回溯条数<small>每个作者最多往前翻多少条，碰到抓过的就停；0=不回溯</small><input id="f_backfill" type="number" value="100" min="0"></label>
         <label id="lb_pushage">推送时间门槛（天）<small>只对回溯补回的发言生效：超过这个天数的老帖只入库不推送；0=不限。实时新发言不受此限制</small><input id="f_pushage" type="number" value="20" min="0"></label>
       </div>
