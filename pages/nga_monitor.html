@@ -130,8 +130,8 @@
         <label>NGA UID<small>ngaPassportUid，登录 NGA 后从浏览器 Cookie 获取</small><input id="f_uid" placeholder="NGA UID" autocomplete="off"></label>
         <label>NGA CID<small>ngaPassportCid</small><input id="f_cid" placeholder="NGA CID" autocomplete="off"></label>
         <label>刷新频率（秒）<input id="f_interval" type="number" value="60" min="5"></label>
-        <label id="lb_backfill">启动时回溯条数<small>每个作者最多往前翻多少条，碰到抓过的就停；0=不回溯</small><input id="f_backfill" type="number" value="50" min="0"></label>
-        <label id="lb_pushage">推送时间门槛（小时）<small>只对回溯补回的发言生效：超过这个岁数的老帖只入库不推送；0=不限。实时新发言不受此限制</small><input id="f_pushage" type="number" value="168" min="0"></label>
+        <label id="lb_backfill">启动时回溯条数<small>每个作者最多往前翻多少条，碰到抓过的就停；0=不回溯</small><input id="f_backfill" type="number" value="100" min="0"></label>
+        <label id="lb_pushage">推送时间门槛（天）<small>只对回溯补回的发言生效：超过这个天数的老帖只入库不推送；0=不限。实时新发言不受此限制</small><input id="f_pushage" type="number" value="20" min="0"></label>
       </div>
 
       <h2 style="margin-top:16px">📌 监控目标（多个帖子可分别添加）</h2>
@@ -173,7 +173,7 @@
   const $ = id => document.getElementById(id);
   const f_uid=$('f_uid'), f_cid=$('f_cid'), f_int=$('f_interval');
   const f_bf=$('f_backfill'), f_pa=$('f_pushage');
-  const BF_DEFAULT=50, PA_DEFAULT=168;
+  const BF_DEFAULT=100, PA_DEFAULT=20;
   const targetsEl=$('targets'), addTargetBtn=$('addTarget');
   const startBtn=$('startBtn'), refreshBtn=$('refreshBtn');
   const cfgBody=$('cfgBody'), toggleBtn=$('toggleCfg');
@@ -194,8 +194,9 @@
   const STORAGE_KEY='nga_monitor_cfg_v2';
   function saveCfg(){
     try{
+      const days=Math.max(0,parseInt(f_pa.value,10)||0);
       const o={ uid:f_uid.value.trim(), cid:f_cid.value.trim(),
-        interval:f_int.value, backfill:f_bf.value, pushage:f_pa.value,
+        interval:f_int.value, backfill:f_bf.value, pushage_days:days, pushage:days*24,
         targets: targets.map(t=>({tid:t.tid, aids:t.aids})),
         collapsed: cfgBody.classList.contains('collapsed') };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(o));
@@ -210,7 +211,15 @@
       f_uid.value=o.uid||''; f_cid.value=o.cid||'';
       f_int.value=o.interval||'60';
       f_bf.value=(o.backfill===undefined||o.backfill==='')?BF_DEFAULT:o.backfill;
-      f_pa.value=(o.pushage===undefined||o.pushage==='')?PA_DEFAULT:o.pushage;
+      // 门槛单位由小时改为天：优先读新字段；老配置按小时换算（168→20 天旧默认，其余÷24）
+      if(o.pushage_days!==undefined && o.pushage_days!==''){
+        f_pa.value=o.pushage_days;
+      }else if(o.pushage!==undefined && o.pushage!==''){
+        const oldH=parseInt(o.pushage,10);
+        f_pa.value=(!isNaN(oldH)&&oldH>0)?(oldH===168?20:Math.max(1,Math.ceil(oldH/24))):PA_DEFAULT;
+      }else{
+        f_pa.value=PA_DEFAULT;
+      }
       syncPushage();
       targets = Array.isArray(o.targets) ? o.targets.map(t=>({tid:String(t.tid||''), aids:String(t.aids||'')})) : [];
       if(!targets.length) targets=[{tid:'',aids:''}];
@@ -334,7 +343,7 @@
     const bf=parseInt(f_bf.value);
     if(!isNaN(bf)&&bf!==BF_DEFAULT) cmd+=' --backfill-posts='+Math.max(0,bf);
     const pa=parseInt(f_pa.value);
-    if(bf>0 && !isNaN(pa)&&pa!==PA_DEFAULT) cmd+=' --push-max-age-hours='+Math.max(0,pa);
+    if(bf>0 && !isNaN(pa)&&pa!==PA_DEFAULT) cmd+=' --push-max-age-days='+Math.max(0,pa);
     return cmd;
   }
   const LAUNCH_TIP='启动命令已复制 ✅ 打开 cmd（命令提示符）→ 右键粘贴 → 回车，即可启动监控并推送企微';

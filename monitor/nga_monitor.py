@@ -90,7 +90,7 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 #   2. 中途碰到「已经抓过的发言」（pid 在缓存里）也立刻停——说明断档到头了；
 #   3. 补回来的发言不按页推：整轮回溯扫完后统一按时间正序推送。
 # 不再单独跑回溯服务/线程，也不再定期反复回溯。
-BACKFILL_MAX_POSTS = 50          # 往前最多回溯多少**条**（--backfill-posts 可配）
+BACKFILL_MAX_POSTS = 100         # 往前最多回溯多少**条**（--backfill-posts 可配）
 
 # 翻页之间的间隔（2026-10-24 起每轮只翻 1 页，间隔主要由轮询周期决定，
 # 这里只是让它别和本轮那十几个常规请求挤在一起）。
@@ -111,9 +111,10 @@ FETCH_COMBO_DELAY = 1.5
 # 推送的「新旧」判据：
 # 只看「pid 是否在缓存里」是不够的——存档一旦缺失（被清/损坏/换机器），
 # 往前翻出来的全是几个月前的老帖，pid 都不在缓存里 → 会被当成新发言全量推送。
-# 因此推送前再用时间判一道：只推 PUSH_MAX_AGE_HOURS 以内的发言，更老的
-# 只入库、不推送（页面照样能看）。
-PUSH_MAX_AGE_HOURS = 168      # 7 天；超过这个岁数的发言只入库不推送
+# 因此推送前再用时间判一道：只推 PUSH_MAX_AGE_DAYS 天以内的发言，更老的
+# 只入库、不推送（页面照样能看）。这条门槛只管回溯补回的发言——实时新发言
+# 用「本次启动时刻」判新，不受它影响。
+PUSH_MAX_AGE_DAYS = 20        # 天；超过这个岁数的补回发言只入库不推送
 
 DEFAULT_CONFIG = {
     "targets": [{"tid": 47207407, "authorids": [150058]}],
@@ -581,6 +582,68 @@ def push_post(post):
     return send_wecom_msg(content)
 
 
+def push_gap_report(posts, floor):
+    """把一批断档发言汇总成一条企微消息，按作者分组、每组带可点开的 NGA 链接。
+
+    断档 = 启动前发的、缓存里没有的发言（末页抓到的 + 回溯翻页补回的）。逐条
+    推会刷屏且受企微限频拖很久，这里压成一条：每个作者一行，给出条数、最新
+    一句摘要和作者过滤视图链接（发言自带 url），完整正文留在监控页面。
+
+    floor 是时间下限，早于它的只入库不进补报；返回是否推送成功。
+    """
+    if not posts:
+        return False
+
+    groups = {}       # authorid -> {name, count, latest}
+    for p in posts:
+        ts = p.get("ts") or 0
+        if ts <= 0 or ts < floor:
+            continue
+        aid = str(p.get("authorid") or "?")
+        g = groups.setdefault(aid, {"name": p.get("author") or f"UID {aid}",
+                                    "count": 0, "latest": None})
+        g["count"] += 1
+        if g["latest"] is None or ts >= (g["latest"].get("ts") or 0):
+            g["latest"] = p
+    if not groups:
+        return False
+
+    valid = sorted((p for p in posts if 0 < (p.get("ts") or 0) and p["ts"] >= floor),
+                   key=lambda x: x["ts"])
+    def _fmt(ts):
+        return datetime.fromtimestamp(ts).strftime("%m-%d %H:%M")
+    head = (f"📋 NGA 断档补报\n"
+            f"时间：{_fmt(valid[0]['ts'])} ~ {_fmt(valid[-1]['ts'])}"
+            f"（共 {len(valid)} 条）")
+
+    lines = []
+    for g in sorted(groups.values(), key=lambda g: g["latest"].get("ts") or 0,
+                    reverse=True):
+        latest = g["latest"]
+        url = latest.get("url") or ""
+        snippet = " ".join((latest.get("content_text") or "").split())
+        if len(snippet) > 40:
+            snippet = snippet[:40] + "…"
+        label = f"[{g['name']}]({url})" if url else g["name"]
+        lines.append(f"> {label}：{g['count']} 条 · 最新「{snippet}」")
+
+    # 企微 markdown 正文 4096 字节上限：按作者整行取舍，超了就在末尾标注省略数
+    tail = "完整内容见监控页面"
+    max_bytes = 4096
+    used = len((head + "\n" + tail).encode("utf-8"))
+    kept = []
+    for ln in lines:
+        size = len((ln + "\n").encode("utf-8"))
+        if used + size > max_bytes - 64:       # 预留给省略提示行
+            break
+        kept.append(ln)
+        used += size
+    omitted = len(lines) - len(kept)
+    body = "\n".join(kept)
+    if omitted:
+        body += f"\n> ……另有 {omitted} 位作者，详见监控页面"
+    return send_wecom_msg(head + "\n" + body + "\n" + tail)
+
 
 
 # ===================== 监控核心 =====================
@@ -1023,8 +1086,8 @@ class NgaMonitor:
         调用方按发言来源传不同的下限，两条路径互不混用：
           - 实时新发言传 started_at（本次启动时刻）：启动前发的断档静默入库，
             不推送。否则每次重启末页都会把停机期间的旧发言当新消息补推一遍。
-          - 回溯补回的发言传 time.time() - push_max_age_hours（默认 7 天，
-            页面「推送时间门槛」可配，0 = 不限）：真正翻旧页补回的老帖受此门槛。
+          - 回溯补回的发言传 time.time() - push_max_age_days * 86400（默认 20 天，
+            页面「推送时间门槛（天）」可配，0 = 不限）：真正翻旧页补回的老帖受此门槛。
 
         ts 解析不出的、早于下限的，一律只入库不推送（页面照样能看）。
 
@@ -1043,12 +1106,12 @@ class NgaMonitor:
         #  - 实时新发言（末页抓到、缓存里没有的）：只推本次进程启动之后发言的。
         #    启动前发的断档静默入库、不推送——否则每次重启都会把停机期间的
         #    旧发言当新消息补推一遍。下限 = started_at，不受时间门槛配置影响。
-        #  - 回溯补回的发言（翻旧页补的）：受 push_max_age_hours 门槛约束。
-        # 0 表示不限；不能用 or 回落默认值，否则页面配 0 会被当成默认 7 天
+        #  - 回溯补回的发言（翻旧页补的）：受 push_max_age_days 门槛约束（单位：天）。
+        # 0 表示不限；不能用 or 回落默认值，否则页面配 0 会被当成默认值
         live_floor = self.started_at
-        raw_age = (self.config or {}).get("push_max_age_hours")
-        max_age_h = PUSH_MAX_AGE_HOURS if raw_age is None else int(raw_age)
-        backfill_floor = (time.time() - max_age_h * 3600) if max_age_h > 0 else 0
+        raw_age = (self.config or {}).get("push_max_age_days")
+        max_age_d = PUSH_MAX_AGE_DAYS if raw_age is None else int(raw_age)
+        backfill_floor = (time.time() - max_age_d * 86400) if max_age_d > 0 else 0
 
         targets = self._resolve_ids()
         all_posts, errors = [], []
@@ -1131,44 +1194,47 @@ class NgaMonitor:
             else:
                 if self.config.get("monitor_enabled") and new_posts:
                     pushed_n = 0
+                    gap_n = 0
                     for p in sorted(new_posts, key=lambda x: x["ts"]):
-                        # 回溯补回的只入库，攒到整轮扫完再统一按时间正序推
+                        # 回溯补回的已由回溯路径攒进补报池，这里跳过避免重复
                         if p["pid"] in backfilled_pids:
                             continue
-                        # 实时新发言：只推本次启动之后发言的，启动前的断档静默入库
-                        if not self._is_pushable(p, live_floor):
-                            continue
-                        print(f"[{datetime.now():%H:%M:%S}] 新发言 uid={p['authorid']} pid={p['pid']} -> 推送")
-                        push_post(p)
-                        pushed_n += 1
+                        # 启动后的真·实时发言逐条推，保持时效
+                        if self._is_pushable(p, live_floor):
+                            print(f"[{datetime.now():%H:%M:%S}] 新发言 uid={p['authorid']} pid={p['pid']} -> 推送")
+                            push_post(p)
+                            pushed_n += 1
+                        else:
+                            # 启动前断档：攒进补报池，整轮扫完汇总成一条
+                            self._bf_pending.append(p)
+                            gap_n += 1
                     self.seen_pids.update(p["pid"] for p in new_posts)
                     self.last_push = time.time()
-                    silent = len(new_posts) - pushed_n
                     print(f"[{datetime.now():%H:%M:%S}] 本轮新增 {len(new_posts)} 条，"
-                          f"已推送 {pushed_n} 条" + (f"（{silent} 条暂存/超期未推）" if silent else "") + "。")
+                          f"实时推送 {pushed_n} 条"
+                          + (f"，断档待补报 {gap_n} 条" if gap_n else "") + "。")
 
             # 启动推送（开启/恢复通知）只发一次；未配置 webhook 或 --test 调试模式安全跳过
             if do_push_startup and not self.startup_pushed:
                 self.push_startup(targets)
                 self.startup_pushed = True
 
-        # 整轮回溯扫完：补回的发言统一按时间正序推送。放在锁外——批量推送
-        # 之间有间隔，长时间占着锁会卡住页面读数据。
-        if flush_batch and self.no_backfill_push:
-            print(f"[{datetime.now():%H:%M:%S}] 回溯结束：{len(flush_batch)} 条补回发言"
+        # 整轮结束：断档（回溯补回 + 启动前实时抓到的）汇总成一条补报推送。
+        # 放在锁外，避免占锁卡住页面读数据。
+        # 回溯开启时，扫完那一轮锁内新抓到的断档 append 在快照之后，这里并进来兜底。
+        report_batch = list(flush_batch)
+        if self._bf_flushed and self._bf_pending:
+            report_batch.extend(self._bf_pending)
+            self._bf_pending = []
+        if report_batch and self.no_backfill_push:
+            print(f"[{datetime.now():%H:%M:%S}] 断档 {len(report_batch)} 条"
                   f"因 --no-backfill-push 只入库、不推送。")
-        elif flush_batch and self.config.get("monitor_enabled"):
-            pushable = [p for p in sorted(flush_batch, key=lambda x: x.get("ts") or 0)
-                        if self._is_pushable(p, backfill_floor)]
-            for i, p in enumerate(pushable):
-                print(f"[{datetime.now():%H:%M:%S}] 补回发言 uid={p['authorid']} "
-                      f"pid={p['pid']} -> 推送")
-                push_post(p)
+        elif report_batch and self.config.get("monitor_enabled"):
+            ok = push_gap_report(report_batch, backfill_floor)
+            if ok:
                 self.last_push = time.time()
-                if i < len(pushable) - 1:
-                    time.sleep(BACKFILL_PUSH_DELAY)
-            print(f"[{datetime.now():%H:%M:%S}] 回溯结束：{len(flush_batch)} 条补回发言"
-                  f"按时间正序推送 {len(pushable)} 条。")
+            print(f"[{datetime.now():%H:%M:%S}] 断档 {len(report_batch)} 条汇总补报"
+                  f"（{'已推送' if ok else '未推送'}）。")
         self.save_cache()
 
     def push_startup(self, targets):
@@ -1539,9 +1605,11 @@ def main():
                         help="回溯补回的历史断档发言只入库、不推企微（避免一次性补回几十条刷屏）")
     parser.add_argument("--backfill-posts", type=int, default=BACKFILL_MAX_POSTS,
                         help=f"启动时每个作者最多往前回溯多少**条**发言（默认 {BACKFILL_MAX_POSTS}）")
-    parser.add_argument("--push-max-age-hours", type=int, default=PUSH_MAX_AGE_HOURS,
-                        help=f"超过这个小时数的发言只入库不推送（默认 {PUSH_MAX_AGE_HOURS}，"
-                             f"即 7 天；设 0 表示不限制）")
+    parser.add_argument("--push-max-age-days", type=int, default=None,
+                        help=f"推送时间门槛（天）：补回发言超过这个岁数只入库不推送"
+                             f"（默认 {PUSH_MAX_AGE_DAYS} 天；设 0 表示不限制）")
+    parser.add_argument("--push-max-age-hours", type=int, default=None,
+                        help="旧参数（小时），兼容用；换算成天后以 --push-max-age-days 为准")
     parser.add_argument("--test", action="store_true",
                         help="调试模式：抓一次并打印，不启动服务/不推送")
     args = parser.parse_args()
@@ -1563,8 +1631,16 @@ def main():
         cfg["no_backfill_push"] = True
     # 回溯条数上限（条，不是页）；0 表示关闭回溯，不可用 or 回落默认值
     cfg["backfill_max_posts"] = max(0, int(args.backfill_posts))
-    # 推送时间门槛（小时）：设 0 = 不限，抓到没见过的就推
-    cfg["push_max_age_hours"] = max(0, int(args.push_max_age_hours or 0))
+    # 推送时间门槛（天）：设 0 = 不限，抓到没见过的就推。
+    # 新参数优先；旧参数 --push-max-age-hours 按 24 小时 = 1 天向上取整换算，兼容老命令。
+    if args.push_max_age_days is not None:
+        age_days = max(0, int(args.push_max_age_days))
+    elif args.push_max_age_hours is not None:
+        h = max(0, int(args.push_max_age_hours))
+        age_days = 0 if h == 0 else max(1, (h + 23) // 24)
+    else:
+        age_days = PUSH_MAX_AGE_DAYS
+    cfg["push_max_age_days"] = age_days
     # 多帖子多作者：--target tid:aid1,aid2 可重复
     cli_targets = []
     for t in (args.target or []):
