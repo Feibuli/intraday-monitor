@@ -685,9 +685,9 @@ class NgaMonitor:
         self._bf_page = {}           # (tid, aid) -> 下一页要翻的页码
         self._bf_got = {}            # (tid, aid) -> 已补回条数
         self._bf_fail = {}           # (tid, aid) -> 连续失败次数
-        # 回溯补回的发言先攒着，等整轮扫完再统一按时间正序推；落盘以防重启丢待推批次
+        # 断档发言先按帖子攒着，某个帖子的所有 (tid,aid) 组合都出队后就推该帖
         self._bf_pending = []
-        self._bf_flushed = False
+        self._bf_done_tids = set()   # 本轮刚扒完的 tid（队列里已无该帖组合），待推
         self.rounds = 0              # 已执行的轮询轮数（用于定期回溯）
         self.last_pages = {}         # (tid, 作者) -> 该作者末页页码（本轮抓取时更新）
         # 回溯补回的发言是否推送企微。仅在「清理历史存量断档」时用
@@ -1038,6 +1038,14 @@ class NgaMonitor:
         print(f"[{datetime.now():%H:%M:%S}] 回溯补抓：{len(q)} 个目标排队，"
               f"每轮翻 1 页慢慢补（不减深度，翻不动的下轮重试）。")
 
+    def _drop_bf_key(self, key):
+        """把一个 (tid,aid) 组合移出回溯队列；若该帖子已无其它组合，标记为「扒完」。"""
+        if key in self._bf_queue:
+            self._bf_queue.remove(key)
+        tid = str(key[0])
+        if not any(str(k[0]) == tid for k in self._bf_queue):
+            self._bf_done_tids.add(tid)
+
     def _backfill(self, targets, all_posts):
         """启动后把漏抓的发言补回来——**分片执行**：每轮只翻 1 页。
 
@@ -1063,7 +1071,7 @@ class NgaMonitor:
         tid, aid = key
         page = self._bf_page.get(key)
         if not page or page < 1:
-            self._bf_queue.pop(0)
+            self._drop_bf_key(key)
             return []
         with self.lock:
             known = {p["pid"] for p in self.posts
@@ -1080,13 +1088,13 @@ class NgaMonitor:
             if self._bf_fail[key] >= BACKFILL_MAX_FAILS:
                 print(f"[{datetime.now():%H:%M:%S}] 回溯 tid={tid} uid={aid} "
                       f"page={page} 连续失败 {self._bf_fail[key]} 次，跳过该目标。")
-                self._bf_queue.pop(0)
+                self._drop_bf_key(key)
             return []
 
         self._bf_fail[key] = 0
         self._bf_got[key] = self._bf_got.get(key, 0) + len(got)
         if stop or next_page < 1:
-            self._bf_queue.pop(0)
+            self._drop_bf_key(key)
             print(f"[{datetime.now():%H:%M:%S}] 回溯完成 tid={tid} uid={aid}："
                   f"共补回 {self._bf_got[key]} 条（还剩 {len(self._bf_queue)} 个目标）。")
         else:
@@ -1153,7 +1161,6 @@ class NgaMonitor:
         # 翻页被风控打挂（详见 _backfill）。放在**第 2 轮**开始，避开第 1 轮刚打完十几个
         # 请求的风控窗口。必须已有历史缓存（seeded）才做——首次运行没有基准。
         backfilled_pids = set()
-        flush_batch = []
         raw_bf = (self.config or {}).get("backfill_max_posts")
         bf_limit = BACKFILL_MAX_POSTS if raw_bf is None else max(0, int(raw_bf))
         if do_backfill and bf_limit > 0:
@@ -1162,19 +1169,8 @@ class NgaMonitor:
                 for p in self._backfill(targets, all_posts):
                     backfilled_pids.add(p["pid"])
                     self._bf_pending.append(p)
-                # 队列清空 = 整轮扫完。翻页是从新往旧走的，逐页推会让整体顺序
-                # 倒过来，所以补回的先攒着，扫完再统一按时间正序推送。
-                if (self._bf_queue is not None and not self._bf_queue
-                        and not self._bf_flushed):
-                    self._bf_flushed = True
-                    flush_batch = list(self._bf_pending)
-                    self._bf_pending = []
-        elif do_backfill and self._bf_pending:
-            # 回溯已关闭：之前攒下还没推的补回批次也要按时间正序推掉，
-            # 不能因为关掉回溯就把这批消息吞掉。
-            self._bf_flushed = True
-            flush_batch = list(self._bf_pending)
-            self._bf_pending = []
+                # 某个帖子的所有 (tid,aid) 组合都出队后，_drop_bf_key 会把该 tid
+                # 记进 _bf_done_tids；末尾逐帖摘出 pending 推送，不等其它帖子。
 
         by_pid = {}
         for p in all_posts:
@@ -1236,22 +1232,39 @@ class NgaMonitor:
                 self.push_startup(targets)
                 self.startup_pushed = True
 
-        # 整轮结束：断档（回溯补回 + 启动前实时抓到的）按帖子合并推送。
-        # 放在锁外，避免占锁卡住页面读数据。
-        # 回溯开启时，扫完那一轮锁内新抓到的断档 append 在快照之后，这里并进来兜底。
-        report_batch = list(flush_batch)
-        if self._bf_flushed and self._bf_pending:
-            report_batch.extend(self._bf_pending)
+        # 断档推送放在锁外，避免占锁卡住页面读数据。此时 pending 已完整
+        # （含回溯补回 + 本轮锁内末页抓到的启动前断档）。按帖子维度：某个帖子的
+        # 所有组合都扒完了就推该帖一条，不等其它帖子。
+        to_push = []
+        if self._bf_done_tids:
+            done = set(self._bf_done_tids)
+            self._bf_done_tids.clear()
+            for tid in done:
+                batch = [p for p in self._bf_pending if str(p.get("tid")) == str(tid)]
+                if batch:
+                    to_push.append((tid, batch))
+                    self._bf_pending = [p for p in self._bf_pending
+                                        if str(p.get("tid")) != str(tid)]
+        # 队列整体清空（全部帖子扒完）或回溯关闭：把还没有归属帖子的残留按帖推掉，
+        # 覆盖「末页抓到但不在回溯队列里的帖」以及重启恢复的存量批次，避免滞留。
+        if (self._bf_queue is not None and not self._bf_queue) or not (do_backfill and bf_limit > 0):
+            rest = {}
+            for p in self._bf_pending:
+                rest.setdefault(str(p.get("tid")), []).append(p)
+            for tid, batch in rest.items():
+                to_push.append((tid, batch))
             self._bf_pending = []
-        if report_batch and self.no_backfill_push:
-            print(f"[{datetime.now():%H:%M:%S}] 断档 {len(report_batch)} 条"
-                  f"因 --no-backfill-push 只入库、不推送。")
-        elif report_batch and self.config.get("monitor_enabled"):
-            ok = push_gap_report(report_batch, backfill_floor)
-            if ok:
-                self.last_push = time.time()
-            print(f"[{datetime.now():%H:%M:%S}] 断档 {len(report_batch)} 条按帖子合并回溯"
-                  f"（{'已推送' if ok else '未推送'}）。")
+
+        for tid, batch in to_push:
+            if self.no_backfill_push:
+                print(f"[{datetime.now():%H:%M:%S}] 帖子 tid={tid} 断档 {len(batch)} 条"
+                      f"因 --no-backfill-push 只入库、不推送。")
+            elif batch and self.config.get("monitor_enabled"):
+                ok = push_gap_report(batch, backfill_floor)
+                if ok:
+                    self.last_push = time.time()
+                print(f"[{datetime.now():%H:%M:%S}] 帖子 tid={tid} 断档 {len(batch)} 条"
+                      f"按帖合并推送（{'已推送' if ok else '未推送'}）。")
         self.save_cache()
 
     def push_startup(self, targets):
